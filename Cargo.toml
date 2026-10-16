@@ -28,10 +28,22 @@ regex = "1"
 pulldown-cmark = "0.12"
 fuzzy-matcher = "0.3"
 directories = "5"
-# 0.37+: system_fonts (default) enables color emoji via the platform emoji font.
-eframe = { version = "0.37", default-features = true, features = ["glow"] }
+# Glow-only: eframe's default also enables wgpu, which pulls wgpu-hal/D3D12 and
+# often fails to compile on Windows MSVC (windows crate version clashes).
+# system_fonts enables color emoji via the platform emoji font.
+eframe = { version = "0.37", default-features = false, features = [
+    "accesskit",
+    "clipboard",
+    "default_fonts",
+    "glow",
+    "links",
+    "system_fonts",
+    "wayland",
+    "x11",
+] }
 egui = "0.37"
-egui_extras = { version = "0.37", features = ["all_loaders"] }
+# Skip `http` loader (ehttp/rustls/ring) — vault images are local files.
+egui_extras = { version = "0.37", features = ["file", "image", "svg", "gif", "webp"] }
 rfd = "0.15"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 emojis = "0.6"

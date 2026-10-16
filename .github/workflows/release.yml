@@ -21,7 +21,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-C debuginfo=0"
 
 jobs:
   build:
@@ -51,6 +50,8 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact: celestine-windows-x86_64
             ext: ".exe"
+            # Native host build on the Windows runner (avoids cross quirks).
+            native: true
 
     steps:
       - uses: actions/checkout@v4
@@ -71,8 +72,18 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Build release
+      - name: Build release (cross / explicit target)
+        if: matrix.native != true
+        env:
+          RUSTFLAGS: "-C debuginfo=0"
         run: cargo build -p celestine-app --release --target ${{ matrix.target }}
+
+      - name: Build release (Windows native)
+        if: matrix.native == true
+        env:
+          # Short paths avoid MAX_PATH link failures with deep crate trees.
+          CARGO_TARGET_DIR: C:/c/target
+        run: cargo build -p celestine-app --release
 
       - name: Stage package (Unix)
         if: runner.os != 'Windows'
@@ -116,7 +127,14 @@ jobs:
           VER="${GITHUB_REF_NAME:-dev}"
           STAGE="dist/${{ matrix.artifact }}"
           mkdir -p "$STAGE" "$STAGE/themes" "$STAGE/config"
-          cp "target/${{ matrix.target }}/release/celestine.exe" "$STAGE/"
+          # Native Windows build (CARGO_TARGET_DIR override or default).
+          if [[ -f "C:/c/target/release/celestine.exe" ]]; then
+            cp "C:/c/target/release/celestine.exe" "$STAGE/"
+          elif [[ -f target/release/celestine.exe ]]; then
+            cp target/release/celestine.exe "$STAGE/"
+          else
+            cp "target/${{ matrix.target }}/release/celestine.exe" "$STAGE/"
+          fi
           cp themes/*.css "$STAGE/themes/"
           cp config/keybindings.*.toml "$STAGE/config/"
           cat > "$STAGE/README.txt" <<EOF
@@ -128,7 +146,11 @@ jobs:
           EOF
           (
             cd dist
-            7z a -tzip "${{ matrix.artifact }}-${VER}.zip" "${{ matrix.artifact }}"
+            if command -v 7z >/dev/null 2>&1; then
+              7z a -tzip "${{ matrix.artifact }}-${VER}.zip" "${{ matrix.artifact }}"
+            else
+              powershell -Command "Compress-Archive -Path '${{ matrix.artifact }}' -DestinationPath '${{ matrix.artifact }}-${VER}.zip'"
+            fi
           )
           ls -la dist/
 
@@ -145,7 +167,8 @@ jobs:
     name: Publish GitHub Release
     needs: build
     runs-on: ubuntu-22.04
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Publish whatever platforms succeeded (don't block the whole release on one OS).
+    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.build.result != 'cancelled'
     steps:
       - uses: actions/checkout@v4
 
@@ -158,6 +181,10 @@ jobs:
           mkdir -p release-assets
           find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp -v {} release-assets/ \;
           ls -la release-assets/
+          test -n "$(ls -A release-assets 2>/dev/null)" || {
+            echo "No release assets from build jobs"
+            exit 1
+          }
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -165,6 +192,7 @@ jobs:
           draft: false
           generate_release_notes: true
           files: release-assets/*
+          fail_on_unmatched_files: true
           body: |
             ## CelestineMD ${{ github.ref_name }}
 
