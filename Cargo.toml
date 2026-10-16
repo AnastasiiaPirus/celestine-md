@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/celestine-core",
+    "crates/celestine-theme",
+    "crates/celestine-app",
+]
+default-members = ["crates/celestine-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["CelestineMD contributors"]
+repository = "https://github.com/celestinemd/celestine"
+
+[workspace.dependencies]
+celestine-core = { path = "crates/celestine-core" }
+celestine-theme = { path = "crates/celestine-theme" }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+toml = "0.8"
+thiserror = "2"
+walkdir = "2"
+notify = "7"
+petgraph = "0.7"
+regex = "1"
+pulldown-cmark = "0.12"
+fuzzy-matcher = "0.3"
+directories = "5"
+eframe = { version = "0.30", default-features = true, features = ["default_fonts", "glow"] }
+egui = "0.30"
+egui_extras = { version = "0.30", features = ["all_loaders"] }
+rfd = "0.15"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+emojis = "0.6"

@@ -1,0 +1,39 @@
+mod app;
+mod emoji_util;
+mod file_tree;
+mod fonts;
+mod graph_view;
+mod icons;
+mod keybinds;
+mod md_edit;
+mod outline_tree;
+mod preview;
+mod state;
+mod theme_apply;
+
+use app::CelestineApp;
+
+fn main() -> eframe::Result<()> {
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!(
+        "../../../assets/icon/celestine-256.png"
+    ))
+    .expect("embedded app icon");
+
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1280.0, 800.0])
+            .with_title("CelestineMD")
+            // Match packaging/celestine.desktop (Wayland app_id / X11 WM_CLASS).
+            .with_app_id("celestine")
+            .with_icon(icon)
+            // Solid window — no alpha framebuffer (avoids Hyprland/Omarchy
+            // treating the surface as translucent / see-through).
+            .with_transparent(false),
+        ..Default::default()
+    };
+    eframe::run_native(
+        "CelestineMD",
+        native_options,
+        Box::new(|cc| Ok(Box::new(CelestineApp::new(cc)))),
+    )
+}

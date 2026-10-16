@@ -1,0 +1,11 @@
+/* CelestineMD theme: dracula — CSS custom properties */
+:root {
+  --background-primary: #282a36;
+  --background-secondary: #21222c;
+  --background-modifier-border: #44475a;
+  --text-normal: #f8f8f2;
+  --text-muted: #6272a4;
+  --text-accent: #bd93f9;
+  --interactive-accent: #ff79c6;
+  --selection: #44475a;
+}

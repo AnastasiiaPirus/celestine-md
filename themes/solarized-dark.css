@@ -1,0 +1,11 @@
+/* CelestineMD theme: solarized-dark — CSS custom properties */
+:root {
+  --background-primary: #002b36;
+  --background-secondary: #073642;
+  --background-modifier-border: #586e75;
+  --text-normal: #839496;
+  --text-muted: #586e75;
+  --text-accent: #268bd2;
+  --interactive-accent: #2aa198;
+  --selection: #073642;
+}

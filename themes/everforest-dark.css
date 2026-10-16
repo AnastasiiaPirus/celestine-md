@@ -1,0 +1,11 @@
+/* CelestineMD theme: everforest-dark — CSS custom properties */
+:root {
+  --background-primary: #2d353b;
+  --background-secondary: #343f44;
+  --background-modifier-border: #3d484d;
+  --text-normal: #d3c6aa;
+  --text-muted: #859289;
+  --text-accent: #a7c080;
+  --interactive-accent: #7fbbb3;
+  --selection: #3d484d;
+}

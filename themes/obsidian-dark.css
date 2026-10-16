@@ -1,0 +1,11 @@
+/* CelestineMD theme: obsidian-dark — CSS custom properties */
+:root {
+  --background-primary: #1e1e1e;
+  --background-secondary: #252525;
+  --background-modifier-border: #333333;
+  --text-normal: #dcddde;
+  --text-muted: #999999;
+  --text-accent: #7f6df2;
+  --interactive-accent: #7f6df2;
+  --selection: #3a3a4a;
+}

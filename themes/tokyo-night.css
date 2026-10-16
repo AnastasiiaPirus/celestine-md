@@ -1,0 +1,11 @@
+/* CelestineMD theme: tokyo-night — CSS custom properties */
+:root {
+  --background-primary: #1a1b26;
+  --background-secondary: #24283b;
+  --background-modifier-border: #414868;
+  --text-normal: #a9b1d6;
+  --text-muted: #565f89;
+  --text-accent: #7aa2f7;
+  --interactive-accent: #7aa2f7;
+  --selection: #292e42;
+}

@@ -1,0 +1,11 @@
+/* CelestineMD theme: catppuccin — CSS custom properties */
+:root {
+  --background-primary: #1e1e2e;
+  --background-secondary: #181825;
+  --background-modifier-border: #313244;
+  --text-normal: #cdd6f4;
+  --text-muted: #6c7086;
+  --text-accent: #89b4fa;
+  --interactive-accent: #89b4fa;
+  --selection: #45475a;
+}

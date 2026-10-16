@@ -1,0 +1,15 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=CelestineMD
+GenericName=Notes
+Comment=Obsidian-inspired Markdown notes — ultralight Rust
+Exec=celestine %F
+TryExec=celestine
+Icon=celestine
+Terminal=false
+StartupNotify=true
+StartupWMClass=celestine
+Categories=Office;TextEditor;
+Keywords=notes;markdown;obsidian;vault;wiki;graph;
+MimeType=inode/directory;text/markdown;text/x-markdown;

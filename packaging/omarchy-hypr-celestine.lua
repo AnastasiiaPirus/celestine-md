@@ -1,0 +1,14 @@
+-- Optional Omarchy/Hyprland snippet for CelestineMD.
+--
+-- By default Celestine ships with an opaque framebuffer
+-- (`ViewportBuilder::with_transparent(false)`), so it participates in Omarchy's
+-- normal `+default-opacity` like other tiled apps. You usually need no rule.
+--
+-- Only add this if you want a fully solid (no compositor alpha) reading surface:
+
+-- o.window("^(celestine|CelestineMD)$", {
+--   tag = "-default-opacity",
+--   opacity = "1 1",
+--   opaque = true,
+--   no_blur = true,
+-- })

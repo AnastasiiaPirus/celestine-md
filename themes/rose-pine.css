@@ -1,0 +1,11 @@
+/* CelestineMD theme: rose-pine — CSS custom properties */
+:root {
+  --background-primary: #191724;
+  --background-secondary: #1f1d2e;
+  --background-modifier-border: #26233a;
+  --text-normal: #e0def4;
+  --text-muted: #6e6a86;
+  --text-accent: #c4a7e7;
+  --interactive-accent: #ebbcba;
+  --selection: #26233a;
+}

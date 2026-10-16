@@ -1,0 +1,14 @@
+---
+description: CelestineMD is Obsidian-inspired, not a clean-room rewrite
+globs:
+alwaysApply: true
+---
+
+# Positioning
+
+CelestineMD is an independent open-source Markdown notes app in Rust, **inspired by** Obsidian — not a clean-room rewrite or clone of Obsidian.
+
+- Do not frame features or docs as “clean-room Obsidian reimplementation.”
+- Do not unpack or copy proprietary Obsidian app binaries, ASAR, Electron sources, or UI assets.
+- Prefer Celestine’s own design; vault/wikilink familiarity is inspiration, not product parity.
+- See docs/INSPIRATION.md.
