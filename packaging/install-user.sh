@@ -9,13 +9,24 @@ APP_DIR="$PREFIX/share/applications"
 ICON_BASE="$PREFIX/share/icons/hicolor"
 ICON_SRC="$ROOT/assets/icon"
 
-mkdir -p "$BIN_DIR" "$APP_DIR"
+SHARE="$PREFIX/share"
+THEMES_DIR="$SHARE/celestine/themes"
+CONFIG_DIR="$SHARE/celestine/config"
+
+mkdir -p "$BIN_DIR" "$APP_DIR" "$THEMES_DIR" "$CONFIG_DIR"
 
 if [[ -x "$ROOT/target/release/celestine" ]]; then
   install -Dm755 "$ROOT/target/release/celestine" "$BIN_DIR/celestine"
 else
   echo "warning: $ROOT/target/release/celestine missing — build with:" >&2
   echo "  cargo build -p celestine-app --release" >&2
+fi
+
+if [[ -d "$ROOT/themes" ]]; then
+  cp -a "$ROOT/themes/"*.css "$THEMES_DIR/" 2>/dev/null || true
+fi
+if [[ -d "$ROOT/config" ]]; then
+  cp -a "$ROOT/config/"keybindings.*.toml "$CONFIG_DIR/" 2>/dev/null || true
 fi
 
 # Desktop entry with PREFIX-relative Exec/TryExec
@@ -46,4 +57,5 @@ fi
 echo "Installed CelestineMD to $PREFIX"
 echo "  binary:  $BIN_DIR/celestine"
 echo "  desktop: $APP_DIR/celestine.desktop"
+echo "  themes:  $THEMES_DIR"
 echo "  icons:   $ICON_BASE/*/apps/celestine.*"

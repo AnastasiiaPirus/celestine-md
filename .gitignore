@@ -1,5 +1,6 @@
 # Rust build artifacts (must never be committed — binaries exceed GitHub's 100MB limit)
 /target/
+/dist/
 
 # Editor / OS noise
 *.rs.bk

@@ -1,0 +1,190 @@
+# Build and publish CelestineMD binaries for Linux, macOS, and Windows.
+# Trigger: push a tag like v0.1.0
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.1.0) — optional for manual runs"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-C debuginfo=0"
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact: celestine-linux-x86_64
+            ext: ""
+          - name: macos-x86_64
+            os: macos-14
+            target: x86_64-apple-darwin
+            artifact: celestine-macos-x86_64
+            ext: ""
+          - name: macos-aarch64
+            os: macos-14
+            target: aarch64-apple-darwin
+            artifact: celestine-macos-aarch64
+            ext: ""
+          - name: windows-x86_64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+            artifact: celestine-windows-x86_64
+            ext: ".exe"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux GUI deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev libclang-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release
+        run: cargo build -p celestine-app --release --target ${{ matrix.target }}
+
+      - name: Stage package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER="${GITHUB_REF_NAME:-dev}"
+          STAGE="dist/${{ matrix.artifact }}"
+          mkdir -p "$STAGE/bin" "$STAGE/share/celestine/themes" "$STAGE/share/celestine/config" \
+                   "$STAGE/share/applications" "$STAGE/share/icons/hicolor/scalable/apps"
+          BIN="target/${{ matrix.target }}/release/celestine${{ matrix.ext }}"
+          install -m755 "$BIN" "$STAGE/bin/celestine"
+          cp -a themes/*.css "$STAGE/share/celestine/themes/"
+          cp -a config/keybindings.*.toml "$STAGE/share/celestine/config/"
+          cp packaging/celestine.desktop "$STAGE/share/applications/"
+          cp assets/icon/celestine.svg "$STAGE/share/icons/hicolor/scalable/apps/celestine.svg"
+          for sz in 16 24 32 48 64 128 256 512; do
+            if [[ -f "assets/icon/celestine-${sz}.png" ]]; then
+              mkdir -p "$STAGE/share/icons/hicolor/${sz}x${sz}/apps"
+              cp "assets/icon/celestine-${sz}.png" "$STAGE/share/icons/hicolor/${sz}x${sz}/apps/celestine.png"
+            fi
+          done
+          cat > "$STAGE/README.txt" <<EOF
+          CelestineMD ${VER} (${{ matrix.artifact }})
+          https://github.com/nek0pi/celestine-md
+
+          Run:  ./bin/celestine /path/to/vault
+          Themes live in share/celestine/themes (also searched under ~/.local/share/celestine/themes).
+          EOF
+          (
+            cd dist
+            tar -czf "${{ matrix.artifact }}-${VER}.tar.gz" "${{ matrix.artifact }}"
+          )
+          ls -la dist/
+
+      - name: Stage package (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER="${GITHUB_REF_NAME:-dev}"
+          STAGE="dist/${{ matrix.artifact }}"
+          mkdir -p "$STAGE" "$STAGE/themes" "$STAGE/config"
+          cp "target/${{ matrix.target }}/release/celestine.exe" "$STAGE/"
+          cp themes/*.css "$STAGE/themes/"
+          cp config/keybindings.*.toml "$STAGE/config/"
+          cat > "$STAGE/README.txt" <<EOF
+          CelestineMD ${VER} (Windows x86_64)
+          https://github.com/nek0pi/celestine-md
+
+          Run:  celestine.exe path\to\vault
+          Place themes next to the exe under themes\, or under %LOCALAPPDATA%\celestine\themes
+          EOF
+          (
+            cd dist
+            7z a -tzip "${{ matrix.artifact }}-${VER}.zip" "${{ matrix.artifact }}"
+          )
+          ls -la dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp -v {} release-assets/ \;
+          ls -la release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          generate_release_notes: true
+          files: release-assets/*
+          body: |
+            ## CelestineMD ${{ github.ref_name }}
+
+            Ultralight Obsidian-inspired Markdown notes (Rust / egui).
+
+            ### Downloads
+            | Platform | Archive |
+            |----------|---------|
+            | Linux x86_64 | `celestine-linux-x86_64-*.tar.gz` |
+            | macOS Apple Silicon | `celestine-macos-aarch64-*.tar.gz` |
+            | macOS Intel | `celestine-macos-x86_64-*.tar.gz` |
+            | Windows x86_64 | `celestine-windows-x86_64-*.zip` |
+
+            ### Install (Linux / macOS)
+            ```bash
+            tar -xzf celestine-*-*.tar.gz
+            ./celestine-*/bin/celestine ~/Notes
+            # or: sudo cp celestine-*/bin/celestine /usr/local/bin/
+            ```
+
+            See [docs/RELEASE.md](docs/RELEASE.md) for Homebrew / AUR notes.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

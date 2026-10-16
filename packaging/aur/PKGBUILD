@@ -1,0 +1,51 @@
+# Maintainer: nek0pi <you@example.com>
+# AUR package: celestine-md (builds from tagged source)
+#
+# Publish:
+#   1. Create AUR account + SSH key
+#   2. git clone ssh://aur@aur.archlinux.org/celestine-md.git
+#   3. Copy PKGBUILD (+ .SRCINFO via `makepkg --printsrcinfo > .SRCINFO`)
+#   4. git push
+#
+# Users:  yay -S celestine-md   OR   paru -S celestine-md
+
+pkgname=celestine-md
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Ultralight Obsidian-inspired Markdown notes (Rust / egui)'
+arch=('x86_64')
+url='https://github.com/nek0pi/celestine-md'
+license=('MIT')
+depends=('libxkbcommon' 'libxcb' 'gtk3')
+makedepends=('cargo' 'clang' 'pkgconf')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP') # replace with real checksum before AUR push
+options=('!lto')
+
+prepare() {
+  cd "celestine-md-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$CARCH-unknown-linux-gnu" 2>/dev/null || cargo fetch --target "$CARCH-unknown-linux-gnu"
+}
+
+build() {
+  cd "celestine-md-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --release -p celestine-app
+}
+
+package() {
+  cd "celestine-md-$pkgver"
+  install -Dm755 target/release/celestine "$pkgdir/usr/bin/celestine"
+  install -Dm644 packaging/celestine.desktop "$pkgdir/usr/share/applications/celestine.desktop"
+  install -Dm644 assets/icon/celestine.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/celestine.svg"
+  for sz in 16 24 32 48 64 128 256 512; do
+    f="assets/icon/celestine-${sz}.png"
+    [[ -f "$f" ]] && install -Dm644 "$f" "$pkgdir/usr/share/icons/hicolor/${sz}x${sz}/apps/celestine.png"
+  done
+  install -d "$pkgdir/usr/share/celestine/themes" "$pkgdir/usr/share/celestine/config"
+  install -Dm644 themes/*.css "$pkgdir/usr/share/celestine/themes/"
+  install -Dm644 config/keybindings.*.toml "$pkgdir/usr/share/celestine/config/"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

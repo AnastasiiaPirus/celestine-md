@@ -9,8 +9,8 @@
 </p>
 
 <p align="center">
-  An open-source knowledge base inspired by Obsidian — wikilinks, graph, backlinks,<br/>
-  and a terminal-honest UI that stays out of your way.
+  An open-source knowledge base inspired by Obsidian — wikilinks, graph, backlinks.<br/>
+  <strong>Keyboard-first</strong> so the GUI can get out of your way · <strong>highly customizable</strong> themes &amp; keybinds so it works <em>just for you</em>.
 </p>
 
 <p align="center">
@@ -29,30 +29,22 @@
   <a href="#keyboard-first">Shortcuts</a> ·
   <a href="#themes">Themes</a> ·
   <a href="#architecture">Architecture</a> ·
-  <a href="docs/INSPIRATION.md">Inspiration</a>
+  <a href="#celestine-vs-obsidian">vs Obsidian</a> ·
+  <a href="docs/INSPIRATION.md">Inspiration</a> ·
+  <a href="#support-the-project">Donate</a>
 </p>
 
 ---
 
 <p align="center">
-  <img src="assets/screenshots/readme-editor.png" alt="CelestineMD editor" width="720">
+  <img src="assets/screenshots/readme-editor.png" alt="CelestineMD editor — tokyo-night theme" width="720">
 </p>
-<p align="center"><sub>Edit mode — files, outline, backlinks, shortcut chrome</sub></p>
+<p align="center"><sub><strong>tokyo-night</strong> — note open with files, outline, backlinks; chords printed in the chrome so you never hunt menus</sub></p>
 
 <p align="center">
-  <img src="assets/screenshots/readme-graph.png" alt="CelestineMD graph view" width="720">
+  <img src="assets/screenshots/readme-graph.png" alt="CelestineMD graph view — tokyo-night theme" width="720">
 </p>
-<p align="center"><sub>Graph view — notes as a link map</sub></p>
-
-<p align="center">
-  <img src="assets/screenshots/readme-quick-open.png" alt="CelestineMD quick open" width="720">
-</p>
-<p align="center"><sub>Quick open (<code>Mod+O</code>) — fuzzy file switcher</sub></p>
-
-<p align="center">
-  <img src="assets/screenshots/readme-shortcuts.png" alt="CelestineMD shortcuts" width="720">
-</p>
-<p align="center"><sub>Shortcuts cheat sheet (<code>?</code>)</sub></p>
+<p align="center"><sub>Graph (<code>Mod+G</code>) — folder-tinted clusters; pan/zoom with the mouse when you want it, shortcut when you don’t</sub></p>
 
 ---
 
@@ -67,69 +59,100 @@ Most note apps either ship Electron bloat or lock you into a proprietary store.
 | **Your vault stays yours** | Plain Markdown on disk. Open any folder of notes. |
 | **Native & fast** | Pure Rust (`egui`/`eframe`) — no Chromium tax. |
 | **Inspired, not cloned** | Familiar ideas (wikilinks, graph, backlinks); Celestine’s own UI and scope. |
-| **Keyboard-native** | Shortcuts printed on the UI. Learn by looking. |
-| **Honest UI** | Terminal/ASCII chrome. No ribbon farm. No plugin bazaar (by design, v0.1). |
+| **Keyboard-first** | Heavy on shortcuts — file tree, tabs, graph, rename, sidebars — so the GUI can shrink out of your way. |
+| **Made for you** | Remappable TOML keybinds + CSS theme packs (folder rainbows, heading colors). Shape the app around *your* habits. |
+| **Honest UI** | Flat flea chrome. No ribbon farm. No plugin bazaar (by design). |
+| **~5× lighter RAM** | Native egui vs Electron — see [Celestine vs Obsidian](#celestine-vs-obsidian). |
 
 ---
 
 ## Features
 
 ### Core knowledge loop
-- **File browser** with vault folders
+- **File tree** — rainbow folders, custom marks, click expand, double-click / F2 rename, keyboard focus (`Ctrl+Tab`)
 - **Fuzzy quick open** — `Ctrl/Cmd+O`
 - **Command palette** — `Ctrl/Cmd+P`
 - **Wikilinks** `[[Note]]`, aliases, heading jumps, embeds `![[…]]`
-- **Outline** from headings
-- **Backlinks** pane
-- **Graph view** — `Ctrl/Cmd+G` (global + local)
-- **Edit + reading preview** — `Ctrl/Cmd+E`
+- **Outline** from headings + **backlinks** pane
+- **Graph view** — `Ctrl/Cmd+G` (clustered, folder-tinted)
+- **Edit + reading preview** — `Ctrl/Cmd+E` (syntax tint in editor)
 - **Vault search** — `Ctrl/Cmd+Shift+F`
+- Multi-tab notes, nav back/forward, reveal-in-tree
 
 ### Themes & keys
-- Built-in **CSS custom-property** packs (`tokyo-night`, `catppuccin`, `nord`, `gruvbox`, …)
+- Built-in **CSS custom-property** packs with distinct folder/heading palettes
 - **`terminal`** theme follows [Omarchy](https://omarchy.org) `colors.toml` when present
 - Remappable TOML keybindings — Obsidian + Omarchy-friendly profiles
+- Color emoji via system fonts
 
-### What v0.1 deliberately skips
-Plugins · Canvas · Sync · Live Preview WYSIWYG · loading arbitrary community `theme.css` engines
+### Deliberately skipped (for now)
+Plugins · Canvas · Sync · Obsidian-style Live Preview WYSIWYG · arbitrary community theme engines
 
 ---
 
 ## Install
 
+### Prebuilt releases (Linux / macOS / Windows)
+
+Tagged releases on GitHub ship archives for **Linux x86_64**, **macOS** (Intel + Apple Silicon), and **Windows x86_64**:
+
+**[github.com/nek0pi/celestine-md/releases](https://github.com/nek0pi/celestine-md/releases)**
+
+```bash
+# Linux / macOS example
+tar -xzf celestine-linux-x86_64-v0.1.0.tar.gz
+./celestine-linux-x86_64/install.sh          # → ~/.local/bin/celestine
+celestine ~/Notes
+```
+
+Windows: unzip and run `celestine.exe` (first launch may show SmartScreen until binaries are signed).
+
+### Homebrew (tap — after first formula publish)
+
+```bash
+brew tap nek0pi/celestine
+brew install celestine-md
+# or from git HEAD:
+brew install --HEAD nek0pi/celestine/celestine-md
+```
+
+Formula draft: [`packaging/homebrew/celestine-md.rb`](packaging/homebrew/celestine-md.rb). See [`docs/RELEASE.md`](docs/RELEASE.md).
+
+### Arch Linux (AUR — after you publish the package)
+
+```bash
+yay -S celestine-md
+# or: paru -S celestine-md
+```
+
+PKGBUILD draft: [`packaging/aur/PKGBUILD`](packaging/aur/PKGBUILD).
+
 ### From source
 
 ```bash
-git clone https://github.com/celestinemd/celestine.git
-cd celestine
-cargo run -p celestine-app --release -- /path/to/vault
-```
-
-### Linux (user install)
-
-```bash
+git clone https://github.com/nek0pi/celestine-md.git
+cd celestine-md
 cargo build -p celestine-app --release
-./packaging/install-user.sh
-```
-
-This installs the binary, `celestine.desktop`, and hicolor icons from `assets/icon/` (PNG sizes + scalable SVG). Then launch **CelestineMD** from your app menu, or:
-
-```bash
+./packaging/install-user.sh   # Linux: binary + desktop + icons + themes → ~/.local
 celestine ~/Notes
 ```
 
 ### Requirements
-- Rust stable toolchain  
-- Linux: usual OpenGL / Wayland or X11 libs for `eframe`  
-- macOS / Windows: same `cargo` build (cross-platform GUI)
+- Rust stable (for source builds)  
+- Linux: OpenGL / Wayland or X11 libs for `eframe`  
+- macOS / Windows: supported via GitHub Actions release builds
 
 ```bash
 cargo test --workspace
 ```
 
+Maintainer release guide (tags, CI, Brew/AUR): [`docs/RELEASE.md`](docs/RELEASE.md).
+
 ---
 
-## Keyboard-first
+## Keyboard-first (and yours to reshape)
+
+Celestine is built so **hands stay on the keyboard**: chords are printed in the status bar and overlays, the file tree is fully traversable without the mouse, and almost every action lives in the command palette (`Mod+P`). The GUI is there when you need it — and easy to hide when you don’t (`Mod+B` / `Mod+\`).
 
 Mod = **Ctrl** on Linux/Windows, **Cmd** on macOS.
 
@@ -139,22 +162,20 @@ Mod = **Ctrl** on Linux/Windows, **Cmd** on macOS.
 | `Mod+P` | Command palette |
 | `Mod+G` | Graph view |
 | `Mod+T` | Theme picker |
-| `Mod+Shift+O` | Open vault |
-| `Mod+R` | Recent vaults |
-| `Mod+Shift+W` | Close vault |
-| `Mod+=` / `Mod+-` | Larger / smaller Markdown font |
-| `Mod+0` | Reset Markdown font |
-| `Mod+W` | Close tab |
 | `Mod+E` | Toggle edit / preview |
-| `Mod+S` | Save |
-| `Mod+N` | New note |
+| `Mod+S` / `Mod+N` / `Mod+W` | Save / new note / close tab |
+| `Alt+←` / `Alt+→` | Previous / next tab |
+| `Ctrl+Tab` | Focus file tree (↑↓←→ · Enter · F2) |
+| `F2` / `Mod+Shift+N` | Rename / new folder |
+| `Mod+B` / `Mod+\` | Toggle files / outline sidebars |
+| `Mod+[` / `Mod+]` | Navigate back / forward |
+| `Mod+Shift+E` | Reveal note in tree |
 | `Mod+Shift+F` | Search vault |
-| `Mod+,` | Settings |
 | `?` / `Mod+/` | Shortcuts cheat sheet |
 
-**Omarchy profile** (default when Omarchy is detected): `Ctrl+Tab` cycle tabs, `Ctrl+1..9` jump tab, `Ctrl+Shift+E` files, `Ctrl+Shift+O` outline — without stealing Hyprland’s `Super` binds.
+**Customize it:** copy [`config/keybindings.omarchy.toml`](config/keybindings.omarchy.toml) → `~/.config/celestine/keybindings.toml`, pick a theme with `Mod+T` or `CELESTINE_THEME=…`, and keep only the chords that match *your* muscle memory. Omarchy profile (auto-detected): `Ctrl+1..9` jump tab, no `Super` binds.
 
-Remap: copy [`config/keybindings.omarchy.toml`](config/keybindings.omarchy.toml) → `~/.config/celestine/keybindings.toml`.
+Full map: [`docs/INSPIRATION.md`](docs/INSPIRATION.md).
 
 ---
 
@@ -165,10 +186,20 @@ Ship-ready packs in [`themes/`](themes/):
 `obsidian-dark` · `obsidian-light` · `catppuccin` · `tokyo-night` · `gruvbox-dark` · `gruvbox-light` · `nord` · `solarized-dark` · `solarized-light` · `dracula` · `rose-pine` · `everforest-dark` · **`terminal`**
 
 ```bash
-CELESTINE_THEME=nord celestine ~/Notes
+CELESTINE_THEME=tokyo-night celestine ~/Notes
 ```
 
-Themes are **CSS custom properties** (`--background-primary`, …) parsed into UI tokens — editable, portable, no Electron required.
+Themes are **CSS custom properties** (`--background-primary`, …) parsed into UI tokens — editable, portable, no Electron required. Each pack gets its own folder rainbow and heading colors so themes actually feel different.
+
+### Try the demo vault
+
+A sample vault (wikilinks, folders, graph-ready) lives **outside** this git repo:
+
+```bash
+CELESTINE_THEME=tokyo-night celestine ~/Projects/celestine-demo-vault
+```
+
+Open `Home.md`, press `Mod+G` for the graph, `?` for the cheat sheet.
 
 <p align="center">
   <img src="assets/icon/celestine.svg" alt="Celestine crystal mark" width="72">
@@ -199,11 +230,25 @@ flowchart LR
 
 ---
 
+## Celestine vs Obsidian
+
+Same idea (local Markdown vaults) — different engine. Obsidian runs on **Electron** (Chromium). Celestine is a **native Rust** GUI (`egui` / `eframe`) with no browser runtime.
+
+Typical idle / light-editing footprint (same machine, similar vault size; order-of-magnitude):
+
+| | **CelestineMD** | **Obsidian** | Notes |
+|---|---|---|---|
+| **Memory (RAM)** | ~**1×** | ~**5×** | Celestine is about **five times lighter** in RAM |
+| **CPU (idle)** | Near-idle; short spikes on keystrokes / redraw | Background Chromium + renderer work even when idle |
+| **GPU** | Light OpenGL/wgpu for UI; no full browser compositor | Chromium GPU process + compositing |
+
+Numbers vary with vault size, plugins (Obsidian), and theme, but the shape is consistent: dropping Electron is most of the win. Celestine stays intentionally small so that light footprint remains a feature, not a temporary phase.
+
+---
+
 ## Inspiration
 
-CelestineMD is an open-source variation **inspired by** Obsidian — local Markdown vaults, wikilinks, graph, backlinks — with its own Rust/egui implementation and feature set. Not affiliated with Obsidian.
-
-Details: [`docs/INSPIRATION.md`](docs/INSPIRATION.md).
+CelestineMD is **inspired by** Obsidian’s local-vault workflow — not a clone. Current scope, shortcuts, and intentional non-goals: [`docs/INSPIRATION.md`](docs/INSPIRATION.md).
 
 ---
 
@@ -214,12 +259,33 @@ Issues and PRs welcome. Keep changes focused; match the ultralight / keyboard-fi
 1. `cargo test --workspace`  
 2. Don’t add plugin-host surface area without an explicit RFC  
 3. Prefer Celestine’s own design over chasing Obsidian feature parity  
+4. Keep [`docs/INSPIRATION.md`](docs/INSPIRATION.md) accurate when behavior changes meaningfully  
 
 ---
 
 ## License
 
 [MIT](LICENSE) — free as in crystal-clear.
+
+---
+
+## Support the project
+
+Celestine stays **MIT**, local-first, and deliberately light. If it helps your vault — and you’d like to keep development moving (performance, themes, keyboard workflows, more features without Electron weight) — donations are welcome:
+
+<p align="center">
+  <a href="https://buymeacoffee.com/nekopi">
+    <img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-nekopi-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me a Coffee">
+  </a>
+</p>
+
+<p align="center">
+  <strong><a href="https://buymeacoffee.com/nekopi">buymeacoffee.com/nekopi</a></strong>
+</p>
+
+<p align="center">
+  <sub>Thanks — it directly funds keeping Celestine light and feature-rich for everyone.</sub>
+</p>
 
 ---
 

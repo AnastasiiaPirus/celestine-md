@@ -33,6 +33,14 @@ pub enum Command {
     PrevPane,
     Tab(u8),
     Escape,
+    Rename,
+    NewFolder,
+    DeleteItem,
+    ToggleLeftSidebar,
+    ToggleRightSidebar,
+    NavBack,
+    NavForward,
+    RevealInTree,
 }
 
 impl Command {
@@ -66,6 +74,14 @@ impl Command {
             Command::PrevPane => "Previous pane",
             Command::Tab(_) => "Jump tab",
             Command::Escape => "Dismiss overlay",
+            Command::Rename => "Rename",
+            Command::NewFolder => "New folder",
+            Command::DeleteItem => "Delete",
+            Command::ToggleLeftSidebar => "Toggle files sidebar",
+            Command::ToggleRightSidebar => "Toggle outline sidebar",
+            Command::NavBack => "Navigate back",
+            Command::NavForward => "Navigate forward",
+            Command::RevealInTree => "Reveal note in tree",
         }
     }
 
@@ -99,6 +115,14 @@ impl Command {
             Command::PrevPane => "prev_pane",
             Command::Tab(_) => "tab_n",
             Command::Escape => "escape",
+            Command::Rename => "rename",
+            Command::NewFolder => "new_folder",
+            Command::DeleteItem => "delete_item",
+            Command::ToggleLeftSidebar => "toggle_left_sidebar",
+            Command::ToggleRightSidebar => "toggle_right_sidebar",
+            Command::NavBack => "nav_back",
+            Command::NavForward => "nav_forward",
+            Command::RevealInTree => "reveal_in_tree",
         }
     }
 }
@@ -148,9 +172,18 @@ impl Keymap {
         k.set(Command::FontBigger, "Mod+=");
         k.set(Command::FontSmaller, "Mod+-");
         k.set(Command::FontReset, "Mod+0");
-        k.set(Command::NextTab, "Ctrl+Tab");
-        k.set(Command::PrevTab, "Ctrl+Shift+Tab");
+        k.set(Command::NextTab, "Alt+Right");
+        k.set(Command::PrevTab, "Alt+Left");
+        k.set(Command::FocusFiles, "Ctrl+Tab");
         k.set(Command::Escape, "Escape");
+        k.set(Command::Rename, "F2");
+        k.set(Command::NewFolder, "Mod+Shift+N");
+        k.set(Command::DeleteItem, "Delete");
+        k.set(Command::ToggleLeftSidebar, "Mod+B");
+        k.set(Command::ToggleRightSidebar, "Mod+\\");
+        k.set(Command::NavBack, "Mod+[");
+        k.set(Command::NavForward, "Mod+]");
+        k.set(Command::RevealInTree, "Mod+Shift+E");
         k.bindings
             .insert(Command::Shortcuts, "? / Mod+/".into());
         k
@@ -160,7 +193,7 @@ impl Keymap {
         let mut k = Self::obsidian_defaults();
         k.profile = "omarchy".into();
         k.set(Command::FormerTab, "Ctrl+Alt+Tab");
-        k.set(Command::FocusFiles, "Ctrl+Shift+E");
+        k.set(Command::FocusFiles, "Ctrl+Tab");
         k.set(Command::FocusOutline, "Ctrl+Shift+O");
         k.set(Command::NextPane, "Ctrl+Alt+Right");
         k.set(Command::PrevPane, "Ctrl+Alt+Left");
@@ -246,6 +279,10 @@ impl Keymap {
                 }
                 continue;
             }
+            // Don't steal Delete from the text editor.
+            if cmd == Command::DeleteItem && editor_focused {
+                continue;
+            }
             if ctx.input_mut(|i| i.consume_shortcut(&sc)) {
                 return Some(cmd);
             }
@@ -318,6 +355,14 @@ fn command_from_id(id: &str) -> Option<Command> {
         "next_pane" => Command::NextPane,
         "prev_pane" => Command::PrevPane,
         "escape" => Command::Escape,
+        "rename" => Command::Rename,
+        "new_folder" => Command::NewFolder,
+        "delete_item" => Command::DeleteItem,
+        "toggle_left_sidebar" => Command::ToggleLeftSidebar,
+        "toggle_right_sidebar" => Command::ToggleRightSidebar,
+        "nav_back" => Command::NavBack,
+        "nav_forward" => Command::NavForward,
+        "reveal_in_tree" => Command::RevealInTree,
         _ => return None,
     })
 }
@@ -349,6 +394,12 @@ fn parse_chord(s: &str) -> Option<KeyboardShortcut> {
             "right" => key = Some(Key::ArrowRight),
             "up" => key = Some(Key::ArrowUp),
             "down" => key = Some(Key::ArrowDown),
+            "f2" => key = Some(Key::F2),
+            "delete" | "del" => key = Some(Key::Delete),
+            "backspace" => key = Some(Key::Backspace),
+            "[" => key = Some(Key::OpenBracket),
+            "]" => key = Some(Key::CloseBracket),
+            "\\" | "backslash" => key = Some(Key::Backslash),
             other => {
                 if other.len() == 1 {
                     let c = other.chars().next()?.to_ascii_uppercase();

@@ -90,6 +90,90 @@ pub struct TreeOutcome {
     pub open_rel: Option<String>,
     /// Folder path whose icon was changed (caller should persist).
     pub icons_changed: bool,
+    /// Double-clicked (or requested) item to begin inline rename.
+    pub start_rename: Option<TreeNavItem>,
+    /// Clicked item — update keyboard cursor.
+    pub focus_item: Option<TreeNavItem>,
+    /// Rename field committed (Enter) → new basename only.
+    pub rename_commit: Option<String>,
+    pub rename_cancel: bool,
+}
+
+/// Inline rename editor for a tree row.
+#[derive(Clone)]
+pub struct RenameEdit {
+    pub item: TreeNavItem,
+    pub draft: String,
+    pub request_focus: bool,
+}
+
+/// Keyboard / focus cursor in the file tree (distinct from the open note).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TreeNavItem {
+    Dir(String),
+    File(String),
+}
+
+/// Visible rows in depth-first order (respects `expanded`).
+pub fn visible_entries(root: &DirNode, expanded: &HashSet<String>) -> Vec<TreeNavItem> {
+    let mut out = Vec::new();
+    collect_visible(root, "", expanded, &mut out);
+    out
+}
+
+fn collect_visible(
+    node: &DirNode,
+    prefix: &str,
+    expanded: &HashSet<String>,
+    out: &mut Vec<TreeNavItem>,
+) {
+    for (name, child) in &node.dirs {
+        let path = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}/{name}")
+        };
+        out.push(TreeNavItem::Dir(path.clone()));
+        if expanded.contains(&path) {
+            collect_visible(child, &path, expanded, out);
+        }
+    }
+    for rel in node.files.values() {
+        out.push(TreeNavItem::File(rel.clone()));
+    }
+}
+
+/// Pick a sensible starting cursor: open note if visible, else first row.
+pub fn default_cursor(
+    root: &DirNode,
+    expanded: &HashSet<String>,
+    active_rel: Option<&str>,
+) -> Option<TreeNavItem> {
+    let entries = visible_entries(root, expanded);
+    if entries.is_empty() {
+        return None;
+    }
+    if let Some(rel) = active_rel {
+        if let Some(hit) = entries
+            .iter()
+            .find(|e| matches!(e, TreeNavItem::File(p) if p == rel))
+        {
+            return Some(hit.clone());
+        }
+        // Prefer the note's parent folder if that row is visible.
+        if let Some(parent) = Path::new(rel).parent() {
+            let p = parent.to_string_lossy().replace('\\', "/");
+            if !p.is_empty() && p != "." {
+                if let Some(hit) = entries
+                    .iter()
+                    .find(|e| matches!(e, TreeNavItem::Dir(d) if d == &p))
+                {
+                    return Some(hit.clone());
+                }
+            }
+        }
+    }
+    entries.into_iter().next()
 }
 
 /// Draw a collapsible file tree with rainbow folders + custom icons.
@@ -101,11 +185,18 @@ pub fn show_tree(
     palette: &crate::theme_apply::ThemePalette,
     muted: Color32,
     active_rel: Option<&str>,
+    cursor: Option<&TreeNavItem>,
+    tree_focused: bool,
+    rename: &mut Option<RenameEdit>,
 ) -> TreeOutcome {
     let active_ancestors = active_ancestors(active_rel);
     let mut outcome = TreeOutcome {
         open_rel: None,
         icons_changed: false,
+        start_rename: None,
+        focus_item: None,
+        rename_commit: None,
+        rename_cancel: false,
     };
     show_dir(
         ui,
@@ -118,6 +209,9 @@ pub fn show_tree(
         muted,
         active_rel,
         &active_ancestors,
+        cursor,
+        tree_focused,
+        rename,
         &mut outcome,
     );
     outcome
@@ -157,6 +251,9 @@ fn show_dir(
     muted: Color32,
     active_rel: Option<&str>,
     active_ancestors: &HashSet<String>,
+    cursor: Option<&TreeNavItem>,
+    tree_focused: bool,
+    rename: &mut Option<RenameEdit>,
     outcome: &mut TreeOutcome,
 ) {
     for (sibling_i, (name, child)) in node.dirs.iter().enumerate() {
@@ -167,6 +264,11 @@ fn show_dir(
         };
         let is_open = expanded.contains(&path);
         let on_path = active_ancestors.contains(&path);
+        let is_cursor = matches!(cursor, Some(TreeNavItem::Dir(p)) if p == &path);
+        let is_renaming = matches!(
+            rename.as_ref(),
+            Some(r) if matches!(&r.item, TreeNavItem::Dir(p) if p == &path)
+        );
         // Child folders cycle the theme rainbow among siblings (not inherited from parent).
         let own_color = palette.folder_at(sibling_i);
         let mut color = own_color;
@@ -192,30 +294,81 @@ fn show_dir(
             egui::vec2(row_w, row_h),
             egui::Sense::click(),
         );
-        if on_path {
+        if is_cursor && tree_focused && !is_renaming {
+            ui.painter().rect_filled(
+                row_rect,
+                2.0,
+                palette.accent.gamma_multiply(0.28),
+            );
+        } else if on_path {
             ui.painter().rect_filled(
                 row_rect,
                 2.0,
                 color.gamma_multiply(0.18),
             );
         }
+
+        let mut rename_resp: Option<egui::Response> = None;
         ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
             ui.horizontal(|ui| {
                 ui.set_min_height(row_h);
                 ui.spacing_mut().item_spacing.x = 4.0;
                 crate::icons::show(ui, chevron, TREE_ICON * 0.85, color);
                 crate::icons::show(ui, folder_mark, TREE_ICON, color);
-                ui.label(RichText::new(name).size(TREE_FONT).color(color).strong());
+                if is_renaming {
+                    if let Some(edit) = rename.as_mut() {
+                        let te = egui::TextEdit::singleline(&mut edit.draft)
+                            .font(egui::FontId::proportional(TREE_FONT))
+                            .desired_width((row_w - 48.0).max(60.0))
+                            .frame(egui::Frame::NONE);
+                        let r = ui.add(te);
+                        if edit.request_focus {
+                            r.request_focus();
+                            edit.request_focus = false;
+                        }
+                        rename_resp = Some(r);
+                    }
+                } else {
+                    // Non-selectable so clicks hit the row (selectable labels steal them).
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(name).size(TREE_FONT).color(color).strong(),
+                        )
+                        .selectable(false),
+                    );
+                }
             });
         });
-        if resp.clicked() {
+
+        if let Some(_r) = rename_resp {
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                outcome.rename_cancel = true;
+            } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                outcome.rename_commit = rename.as_ref().map(|e| e.draft.clone());
+            }
+        } else if resp.double_clicked() {
+            outcome.start_rename = Some(TreeNavItem::Dir(path.clone()));
+            outcome.focus_item = Some(TreeNavItem::Dir(path.clone()));
+        } else if resp.clicked() {
+            outcome.focus_item = Some(TreeNavItem::Dir(path.clone()));
             if is_open {
                 expanded.remove(&path);
             } else {
                 expanded.insert(path.clone());
             }
         }
+
         resp.context_menu(|ui| {
+            if ui
+                .add(
+                    egui::Button::new(RichText::new("rename").size(12.0).color(color))
+                        .frame(false),
+                )
+                .clicked()
+            {
+                outcome.start_rename = Some(TreeNavItem::Dir(path.clone()));
+                ui.close();
+            }
             ui.label(RichText::new("folder mark").size(11.0).color(muted));
             ui.add_space(4.0);
             egui::Grid::new(format!("icon-grid-{path}"))
@@ -265,6 +418,9 @@ fn show_dir(
                     muted,
                     active_rel,
                     active_ancestors,
+                    cursor,
+                    tree_focused,
+                    rename,
                     outcome,
                 );
             });
@@ -273,6 +429,11 @@ fn show_dir(
 
     for (name, rel) in &node.files {
         let selected = active_rel == Some(rel.as_str());
+        let is_cursor = matches!(cursor, Some(TreeNavItem::File(p)) if p == rel);
+        let is_renaming = matches!(
+            rename.as_ref(),
+            Some(r) if matches!(&r.item, TreeNavItem::File(p) if p == rel)
+        );
         // Files match the enclosing folder's color (latest parent), not muted/accent.
         let mut color = folder_color;
         if selected {
@@ -284,27 +445,61 @@ fn show_dir(
             egui::vec2(row_w, row_h),
             egui::Sense::click(),
         );
-        if selected {
+        if is_cursor && tree_focused && !is_renaming {
+            ui.painter().rect_filled(
+                row_rect,
+                2.0,
+                palette.accent.gamma_multiply(0.28),
+            );
+        } else if selected {
             ui.painter().rect_filled(
                 row_rect,
                 2.0,
                 folder_color.gamma_multiply(0.22),
             );
         }
+
+        let mut rename_resp: Option<egui::Response> = None;
         ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
             ui.horizontal(|ui| {
                 ui.set_min_height(row_h);
                 ui.spacing_mut().item_spacing.x = 4.0;
                 ui.add_space(TREE_ICON * 0.85 + 4.0);
                 crate::icons::show(ui, "file-text", TREE_ICON, color);
-                let mut label = RichText::new(name).size(TREE_FONT).color(color);
-                if selected {
-                    label = label.strong();
+                if is_renaming {
+                    if let Some(edit) = rename.as_mut() {
+                        let te = egui::TextEdit::singleline(&mut edit.draft)
+                            .font(egui::FontId::proportional(TREE_FONT))
+                            .desired_width((row_w - 48.0).max(60.0))
+                            .frame(egui::Frame::NONE);
+                        let r = ui.add(te);
+                        if edit.request_focus {
+                            r.request_focus();
+                            edit.request_focus = false;
+                        }
+                        rename_resp = Some(r);
+                    }
+                } else {
+                    let mut label = RichText::new(name).size(TREE_FONT).color(color);
+                    if selected {
+                        label = label.strong();
+                    }
+                    ui.add(egui::Label::new(label).selectable(false));
                 }
-                ui.label(label);
             });
         });
-        if resp.clicked() {
+
+        if let Some(_r) = rename_resp {
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                outcome.rename_cancel = true;
+            } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                outcome.rename_commit = rename.as_ref().map(|e| e.draft.clone());
+            }
+        } else if resp.double_clicked() {
+            outcome.start_rename = Some(TreeNavItem::File(rel.clone()));
+            outcome.focus_item = Some(TreeNavItem::File(rel.clone()));
+        } else if resp.clicked() {
+            outcome.focus_item = Some(TreeNavItem::File(rel.clone()));
             outcome.open_rel = Some(rel.clone());
         }
     }

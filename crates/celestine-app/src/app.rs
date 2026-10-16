@@ -71,6 +71,10 @@ pub struct CelestineApp {
     last_frame: Instant,
     persist: AppState,
     tree_expanded: HashSet<String>,
+    /// Keyboard cursor in the file tree (when Files pane is focused).
+    tree_cursor: Option<file_tree::TreeNavItem>,
+    /// Inline rename editor for a tree row.
+    tree_rename: Option<file_tree::RenameEdit>,
     /// Outline paths that are collapsed (default = expanded).
     outline_collapsed: HashSet<String>,
     /// One-shot: grab keyboard focus into the overlay filter on open.
@@ -127,6 +131,8 @@ impl CelestineApp {
             last_frame: Instant::now(),
             persist,
             tree_expanded: HashSet::new(),
+            tree_cursor: None,
+            tree_rename: None,
             outline_collapsed: HashSet::new(),
             overlay_focus_pending: false,
             folder_icons: HashMap::new(),
@@ -330,7 +336,7 @@ impl CelestineApp {
             Command::Settings => self.open_overlay(Overlay::Settings),
             Command::Find => self.open_overlay(Overlay::Find),
             Command::ThemePicker => self.open_overlay(Overlay::ThemePicker),
-            Command::OpenVault => self.pick_vault_dialog(ctx),
+            Command::OpenVault => self.pick_vault_dialog(&ctx),
             Command::RecentVaults => self.open_overlay(Overlay::RecentVaults),
             Command::CloseVault => self.close_vault(),
             Command::FontBigger => self.bump_editor_font(1.5),
@@ -352,8 +358,16 @@ impl CelestineApp {
             Command::CloseTab => self.close_active_tab(),
             Command::NewNote => {
                 if self.vault.is_some() {
+                    let folder = self.tree_create_parent();
                     let name = format!("Untitled {}.md", chrono_lite_stamp());
-                    self.open_note(&name, true);
+                    let rel = if folder.is_empty() {
+                        name
+                    } else {
+                        format!("{folder}/{name}")
+                    };
+                    self.expand_ancestors(&rel);
+                    self.open_note(&rel, true);
+                    self.focus = FocusPane::Editor;
                 }
             }
             Command::Save => self.save_active(),
@@ -364,8 +378,12 @@ impl CelestineApp {
             }
             Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Command::Escape => {
-                if self.overlay != Overlay::None {
+                if self.tree_rename.is_some() {
+                    self.tree_rename = None;
+                } else if self.overlay != Overlay::None {
                     self.overlay = Overlay::None;
+                } else if self.focus == FocusPane::Files {
+                    self.focus = FocusPane::Editor;
                 } else if self.show_graph {
                     self.show_graph = false;
                 }
@@ -388,7 +406,17 @@ impl CelestineApp {
                 self.former_tab = self.active_tab;
                 self.active_tab = f;
             }
-            Command::FocusFiles => self.focus = FocusPane::Files,
+            Command::FocusFiles => {
+                if self.focus == FocusPane::Files {
+                    self.focus = FocusPane::Editor;
+                } else {
+                    self.persist.show_left_sidebar = true;
+                    self.focus = FocusPane::Files;
+                    self.editor_focused = false;
+                    self.show_graph = false;
+                    // Cursor filled on next paint via ensure_tree_cursor.
+                }
+            }
             Command::FocusOutline => self.focus = FocusPane::Outline,
             Command::NextPane => self.cycle_pane(1),
             Command::PrevPane => self.cycle_pane(-1),
@@ -399,6 +427,14 @@ impl CelestineApp {
                     self.active_tab = i;
                 }
             }
+            Command::Rename => self.begin_rename_from_command(),
+            Command::NewFolder => self.create_folder_here(),
+            Command::DeleteItem => self.delete_tree_selection(),
+            Command::ToggleLeftSidebar => self.toggle_left_sidebar(),
+            Command::ToggleRightSidebar => self.toggle_right_sidebar(),
+            Command::NavBack => self.nav_go_back(),
+            Command::NavForward => self.nav_go_forward(),
+            Command::RevealInTree => self.reveal_active_in_tree(),
         }
     }
 
@@ -431,6 +467,376 @@ impl CelestineApp {
             self.open_vault(path, ctx);
         }
     }
+
+    fn expand_ancestors(&mut self, rel: &str) {
+        if let Some(parent) = Path::new(rel).parent() {
+            let mut acc = String::new();
+            for part in parent.components() {
+                let p = part.as_os_str().to_string_lossy();
+                if p == "." || p.is_empty() {
+                    continue;
+                }
+                if !acc.is_empty() {
+                    acc.push('/');
+                }
+                acc.push_str(&p);
+                self.tree_expanded.insert(acc.clone());
+            }
+        }
+    }
+
+    fn ensure_tree_cursor(&mut self, tree: &file_tree::DirNode, active: Option<&str>) {
+        let entries = file_tree::visible_entries(tree, &self.tree_expanded);
+        if entries.is_empty() {
+            self.tree_cursor = None;
+            return;
+        }
+        let still_visible = self
+            .tree_cursor
+            .as_ref()
+            .is_some_and(|c| entries.iter().any(|e| e == c));
+        if !still_visible {
+            self.tree_cursor = file_tree::default_cursor(tree, &self.tree_expanded, active);
+        }
+    }
+
+    /// Arrow / Enter navigation while the file tree has focus.
+    /// Returns a note path when Enter opens a file.
+    fn handle_tree_keys(
+        &mut self,
+        ctx: &egui::Context,
+        tree: &file_tree::DirNode,
+    ) -> Option<String> {
+        use egui::{Key, Modifiers};
+
+        // Inline rename owns Enter/Esc/arrows.
+        if self.tree_rename.is_some() {
+            return None;
+        }
+
+        let entries = file_tree::visible_entries(tree, &self.tree_expanded);
+        if entries.is_empty() {
+            return None;
+        }
+        let active = self.tabs.get(self.active_tab).map(|t| t.rel.clone());
+        self.ensure_tree_cursor(tree, active.as_deref());
+        let Some(cursor) = self.tree_cursor.clone() else {
+            return None;
+        };
+        let idx = entries.iter().position(|e| e == &cursor).unwrap_or(0);
+
+        let up = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowUp));
+        let down = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowDown));
+        let left = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowLeft));
+        let right = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowRight));
+        let enter = ctx.input_mut(|i| {
+            i.consume_key(Modifiers::NONE, Key::Enter)
+                || i.consume_key(Modifiers::NONE, Key::Space)
+        });
+
+        if up {
+            let next = idx.saturating_sub(1);
+            self.tree_cursor = Some(entries[next].clone());
+            return None;
+        }
+        if down {
+            let next = (idx + 1).min(entries.len() - 1);
+            self.tree_cursor = Some(entries[next].clone());
+            return None;
+        }
+        if left {
+            match &cursor {
+                file_tree::TreeNavItem::Dir(path) if self.tree_expanded.contains(path) => {
+                    self.tree_expanded.remove(path);
+                }
+                file_tree::TreeNavItem::Dir(path) | file_tree::TreeNavItem::File(path) => {
+                    if let Some(parent) = Path::new(path).parent() {
+                        let p = parent.to_string_lossy().replace('\\', "/");
+                        if !p.is_empty() && p != "." {
+                            if let Some(hit) = entries
+                                .iter()
+                                .find(|e| matches!(e, file_tree::TreeNavItem::Dir(d) if d == &p))
+                            {
+                                self.tree_cursor = Some(hit.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            return None;
+        }
+        if right {
+            if let file_tree::TreeNavItem::Dir(path) = &cursor {
+                if !self.tree_expanded.contains(path) {
+                    self.tree_expanded.insert(path.clone());
+                } else {
+                    // Move into first child if any became visible.
+                    let refreshed = file_tree::visible_entries(tree, &self.tree_expanded);
+                    if let Some(i) = refreshed.iter().position(|e| e == &cursor) {
+                        if i + 1 < refreshed.len() {
+                            self.tree_cursor = Some(refreshed[i + 1].clone());
+                        }
+                    }
+                }
+            }
+            return None;
+        }
+        if enter {
+            match &cursor {
+                file_tree::TreeNavItem::Dir(path) => {
+                    if self.tree_expanded.contains(path) {
+                        self.tree_expanded.remove(path);
+                    } else {
+                        self.tree_expanded.insert(path.clone());
+                    }
+                    None
+                }
+                file_tree::TreeNavItem::File(rel) => Some(rel.clone()),
+            }
+        } else {
+            None
+        }
+    }
+
+    fn tree_create_parent(&self) -> String {
+        match &self.tree_cursor {
+            Some(file_tree::TreeNavItem::Dir(p)) => p.clone(),
+            Some(file_tree::TreeNavItem::File(rel)) => Path::new(rel)
+                .parent()
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .filter(|p| !p.is_empty() && p != ".")
+                .unwrap_or_default(),
+            None => String::new(),
+        }
+    }
+
+    fn start_tree_rename(&mut self, item: file_tree::TreeNavItem) {
+        let draft = match &item {
+            file_tree::TreeNavItem::Dir(p) => Path::new(p)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| p.clone()),
+            file_tree::TreeNavItem::File(rel) => Path::new(rel)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| rel.clone()),
+        };
+        self.tree_cursor = Some(item.clone());
+        self.focus = FocusPane::Files;
+        self.editor_focused = false;
+        self.tree_rename = Some(file_tree::RenameEdit {
+            item,
+            draft,
+            request_focus: true,
+        });
+    }
+
+    fn begin_rename_from_command(&mut self) {
+        if self.vault.is_none() {
+            return;
+        }
+        if let Some(item) = self.tree_cursor.clone() {
+            if self.focus == FocusPane::Files {
+                self.start_tree_rename(item);
+                return;
+            }
+        }
+        // Rename the active note when the editor has focus.
+        if let Some(rel) = self.tabs.get(self.active_tab).map(|t| t.rel.clone()) {
+            self.persist.show_left_sidebar = true;
+            self.expand_ancestors(&rel);
+            self.start_tree_rename(file_tree::TreeNavItem::File(rel));
+        }
+    }
+
+    fn commit_tree_rename(&mut self, draft: String) {
+        let Some(edit) = self.tree_rename.take() else {
+            return;
+        };
+        let new_name = draft.trim().replace(['/', '\\'], "");
+        if new_name.is_empty() {
+            self.status = "rename cancelled (empty name)".into();
+            return;
+        }
+        let old_rel = match &edit.item {
+            file_tree::TreeNavItem::Dir(p) | file_tree::TreeNavItem::File(p) => p.clone(),
+        };
+        let parent = Path::new(&old_rel)
+            .parent()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .filter(|p| !p.is_empty() && p != ".")
+            .unwrap_or_default();
+        let new_rel = if parent.is_empty() {
+            new_name
+        } else {
+            format!("{parent}/{new_name}")
+        };
+        if new_rel == old_rel {
+            return;
+        }
+        let Some(vault) = self.vault.as_mut() else {
+            return;
+        };
+        match vault.rename_entry(&old_rel, &new_rel) {
+            Ok(()) => {
+                self.remap_after_rename(&old_rel, &new_rel, matches!(edit.item, file_tree::TreeNavItem::Dir(_)));
+                self.status = format!("renamed → {new_rel}");
+            }
+            Err(e) => {
+                self.status = format!("rename failed: {e}");
+                self.tree_rename = Some(edit);
+            }
+        }
+    }
+
+    fn remap_after_rename(&mut self, old_rel: &str, new_rel: &str, is_dir: bool) {
+        let remap = |path: &str| -> String {
+            if path == old_rel {
+                new_rel.to_string()
+            } else if is_dir {
+                let prefix = format!("{old_rel}/");
+                if let Some(rest) = path.strip_prefix(&prefix) {
+                    format!("{new_rel}/{rest}")
+                } else {
+                    path.to_string()
+                }
+            } else {
+                path.to_string()
+            }
+        };
+
+        for tab in &mut self.tabs {
+            tab.rel = remap(&tab.rel);
+        }
+        for p in &mut self.nav_back {
+            *p = remap(p);
+        }
+        for p in &mut self.nav_forward {
+            *p = remap(p);
+        }
+
+        let expanded: Vec<String> = self.tree_expanded.drain().collect();
+        for p in expanded {
+            self.tree_expanded.insert(remap(&p));
+        }
+
+        let icons: Vec<(String, String)> = self.folder_icons.drain().collect();
+        for (k, v) in icons {
+            self.folder_icons.insert(remap(&k), v);
+        }
+        self.persist_folder_icons();
+
+        self.tree_cursor = Some(if is_dir {
+            file_tree::TreeNavItem::Dir(new_rel.to_string())
+        } else {
+            file_tree::TreeNavItem::File(new_rel.to_string())
+        });
+        if is_dir {
+            self.tree_expanded.insert(new_rel.to_string());
+        }
+    }
+
+    fn create_folder_here(&mut self) {
+        let parent = self.tree_create_parent();
+        let mut name = "New folder".to_string();
+        let mut n = 2;
+        let folder_rel = loop {
+            let candidate = if parent.is_empty() {
+                name.clone()
+            } else {
+                format!("{parent}/{name}")
+            };
+            let exists = self
+                .vault
+                .as_ref()
+                .map(|v| v.root.join(&candidate).exists())
+                .unwrap_or(false);
+            if !exists {
+                break candidate;
+            }
+            name = format!("New folder {n}");
+            n += 1;
+        };
+        let Some(vault) = self.vault.as_mut() else {
+            return;
+        };
+        match vault.create_folder(&folder_rel) {
+            Ok(()) => {
+                self.expand_ancestors(&format!("{folder_rel}/_"));
+                self.tree_expanded.insert(folder_rel.clone());
+                self.persist.show_left_sidebar = true;
+                self.focus = FocusPane::Files;
+                self.start_tree_rename(file_tree::TreeNavItem::Dir(folder_rel));
+                self.status = "folder created".into();
+            }
+            Err(e) => self.status = format!("new folder failed: {e}"),
+        }
+    }
+
+    fn delete_tree_selection(&mut self) {
+        if self.focus != FocusPane::Files {
+            return;
+        }
+        let Some(item) = self.tree_cursor.clone() else {
+            return;
+        };
+        let rel = match &item {
+            file_tree::TreeNavItem::Dir(p) | file_tree::TreeNavItem::File(p) => p.clone(),
+        };
+        let Some(vault) = self.vault.as_mut() else {
+            return;
+        };
+        match vault.delete_entry(&rel) {
+            Ok(()) => {
+                // Close tabs under deleted path.
+                let prefix = format!("{rel}/");
+                self.tabs.retain(|t| t.rel != rel && !t.rel.starts_with(&prefix));
+                if self.active_tab >= self.tabs.len() {
+                    self.active_tab = self.tabs.len().saturating_sub(1);
+                }
+                self.tree_expanded.remove(&rel);
+                self.folder_icons.remove(&rel);
+                self.persist_folder_icons();
+                self.tree_cursor = None;
+                self.status = format!("deleted {rel}");
+            }
+            Err(e) => self.status = format!("delete failed: {e}"),
+        }
+    }
+
+    fn nav_go_back(&mut self) {
+        let Some(prev) = self.nav_back.pop() else {
+            self.status = "no back history".into();
+            return;
+        };
+        if let Some(cur) = self.tabs.get(self.active_tab).map(|t| t.rel.clone()) {
+            self.nav_forward.push(cur);
+        }
+        self.open_note(&prev, false);
+    }
+
+    fn nav_go_forward(&mut self) {
+        let Some(next) = self.nav_forward.pop() else {
+            self.status = "no forward history".into();
+            return;
+        };
+        if let Some(cur) = self.tabs.get(self.active_tab).map(|t| t.rel.clone()) {
+            self.nav_back.push(cur);
+        }
+        self.open_note(&next, false);
+    }
+
+    fn reveal_active_in_tree(&mut self) {
+        let Some(rel) = self.tabs.get(self.active_tab).map(|t| t.rel.clone()) else {
+            return;
+        };
+        self.persist.show_left_sidebar = true;
+        self.expand_ancestors(&rel);
+        self.tree_cursor = Some(file_tree::TreeNavItem::File(rel));
+        self.focus = FocusPane::Files;
+        self.editor_focused = false;
+        self.status = "revealed in files".into();
+    }
 }
 
 fn chrono_lite_stamp() -> String {
@@ -460,8 +866,8 @@ impl eframe::App for CelestineApp {
             }
         }
 
-        if let Some(cmd) = self.keymap.consume(ctx, self.editor_focused) {
-            self.handle_command(cmd, ctx);
+        if let Some(cmd) = self.keymap.consume(&ctx, self.editor_focused) {
+            self.handle_command(cmd, &ctx);
         }
 
         let palette = theme_apply::ThemePalette::from_tokens(&self.theme);
@@ -541,7 +947,7 @@ impl eframe::App for CelestineApp {
                         .on_hover_text("Open vault")
                         .clicked()
                         {
-                            self.pick_vault_dialog(ctx);
+                            self.pick_vault_dialog(&ctx);
                         }
                     });
                 });
@@ -607,15 +1013,14 @@ impl eframe::App for CelestineApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let strip = match self.focus {
                         FocusPane::Files => format!(
-                            "files {} · open {} · ?",
-                            self.keymap.display_chord(Command::FocusFiles),
-                            self.keymap.display_chord(Command::QuickOpen)
+                            "files · ↑↓ move · ←→ fold · Enter open · Esc editor · {}",
+                            self.keymap.display_chord(Command::FocusFiles)
                         ),
                         FocusPane::Editor => format!(
-                            "save {} · preview {} · close {} · ?",
-                            self.keymap.display_chord(Command::Save),
-                            self.keymap.display_chord(Command::TogglePreview),
-                            self.keymap.display_chord(Command::CloseTab)
+                            "{} tabs · {} files · save {} · ?",
+                            self.keymap.display_chord(Command::NextTab),
+                            self.keymap.display_chord(Command::FocusFiles),
+                            self.keymap.display_chord(Command::Save)
                         ),
                         FocusPane::Outline => "outline · click heading".into(),
                         FocusPane::Graph => format!(
@@ -651,7 +1056,7 @@ impl eframe::App for CelestineApp {
                         });
                     });
                     ui.label(
-                        RichText::new("right-click folder → mark")
+                        RichText::new("click expand · dbl-click rename · F2")
                             .size(10.0)
                             .color(muted.gamma_multiply(0.75)),
                     );
@@ -664,7 +1069,18 @@ impl eframe::App for CelestineApp {
                             .unwrap_or_default();
                         paths.sort();
                         let tree = file_tree::build_tree(&paths);
-                        let active = self.tabs.get(self.active_tab).map(|t| t.rel.as_str());
+                        let active_owned = self.tabs.get(self.active_tab).map(|t| t.rel.clone());
+                        let active = active_owned.as_deref();
+                        let tree_focused = self.focus == FocusPane::Files;
+                        if tree_focused && self.overlay == Overlay::None {
+                            if let Some(rel) = self.handle_tree_keys(&ctx, &tree) {
+                                self.expand_ancestors(&rel);
+                                self.open_note(&rel, true);
+                                self.focus = FocusPane::Editor;
+                            }
+                        }
+                        self.ensure_tree_cursor(&tree, active);
+                        let cursor = self.tree_cursor.clone();
                         let outcome = ScrollArea::vertical()
                             .show(ui, |ui| {
                                 file_tree::show_tree(
@@ -675,6 +1091,9 @@ impl eframe::App for CelestineApp {
                                     &palette,
                                     muted,
                                     active,
+                                    cursor.as_ref(),
+                                    tree_focused,
+                                    &mut self.tree_rename,
                                 )
                             })
                             .inner;
@@ -682,28 +1101,30 @@ impl eframe::App for CelestineApp {
                             self.persist_folder_icons();
                             self.status = "folder icon saved".into();
                         }
+                        if let Some(item) = outcome.focus_item {
+                            self.tree_cursor = Some(item);
+                            self.focus = FocusPane::Files;
+                            self.editor_focused = false;
+                        }
+                        if let Some(item) = outcome.start_rename {
+                            self.start_tree_rename(item);
+                        }
+                        if outcome.rename_cancel {
+                            self.tree_rename = None;
+                        }
+                        if let Some(draft) = outcome.rename_commit {
+                            self.commit_tree_rename(draft);
+                        }
                         if let Some(rel) = outcome.open_rel {
-                            if let Some(parent) = Path::new(&rel).parent() {
-                                let mut acc = String::new();
-                                for part in parent.components() {
-                                    let p = part.as_os_str().to_string_lossy();
-                                    if p == "." || p.is_empty() {
-                                        continue;
-                                    }
-                                    if !acc.is_empty() {
-                                        acc.push('/');
-                                    }
-                                    acc.push_str(&p);
-                                    self.tree_expanded.insert(acc.clone());
-                                }
-                            }
+                            self.expand_ancestors(&rel);
                             self.open_note(&rel, true);
+                            self.focus = FocusPane::Editor;
                         }
                     } else {
                         ui.label(RichText::new("(no vault)").color(muted));
                         if naked_button(ui, RichText::new("open folder…").color(accent)).clicked()
                         {
-                            self.pick_vault_dialog(ctx);
+                            self.pick_vault_dialog(&ctx);
                         }
                     }
                 });
@@ -842,7 +1263,7 @@ impl eframe::App for CelestineApp {
                     )
                     .clicked()
                     {
-                        self.pick_vault_dialog(ctx);
+                        self.pick_vault_dialog(&ctx);
                     }
                     if naked_button(
                         ui,
@@ -1059,6 +1480,7 @@ impl eframe::App for CelestineApp {
                                     .0;
                                 ui.add_space(gutter_gap + pad);
 
+                                let editor_live = self.focus != FocusPane::Files;
                                 let te = TextEdit::multiline(
                                     &mut self.tabs[tab_idx].buffer,
                                 )
@@ -1067,6 +1489,7 @@ impl eframe::App for CelestineApp {
                                 .frame(egui::Frame::NONE)
                                 .desired_width(text_w)
                                 .desired_rows(desired_rows)
+                                .interactive(editor_live)
                                 .layouter(&mut layouter);
                                 let mut out = te.show(ui);
 
@@ -1081,6 +1504,9 @@ impl eframe::App for CelestineApp {
                                     ));
                                     out.state.store(ui.ctx(), id);
                                     ui.scroll_to_cursor(Some(egui::Align::TOP));
+                                }
+                                if !editor_live {
+                                    out.response.surrender_focus();
                                 }
 
                                 let gutter_rect = egui::Rect::from_min_size(
@@ -1101,6 +1527,9 @@ impl eframe::App for CelestineApp {
                             .inner
                         })
                         .inner;
+                    if focused {
+                        self.focus = FocusPane::Editor;
+                    }
                     self.editor_focused = focused;
                     if changed {
                         let expanded =
@@ -1126,7 +1555,7 @@ impl eframe::App for CelestineApp {
             }
         });
 
-        self.draw_overlay(ctx, accent, muted);
+        self.draw_overlay(&ctx, accent, muted);
         ctx.request_repaint_after(std::time::Duration::from_millis(33));
     }
 }
@@ -1165,7 +1594,7 @@ impl CelestineApp {
             .order(egui::Order::Middle)
             .interactable(true)
             .sense(egui::Sense::click())
-            .show(ctx, |ui| {
+            .show(&ctx, |ui| {
                 let screen = ctx.content_rect();
                 let resp = ui.allocate_response(screen.size(), egui::Sense::click());
                 ui.painter().rect_filled(
@@ -1182,7 +1611,7 @@ impl CelestineApp {
             .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 64.0 * alpha))
             .order(egui::Order::Foreground)
             .interactable(true)
-            .show(ctx, |ui| {
+            .show(&ctx, |ui| {
                 theme_apply::overlay_frame(&self.theme).show(ui, |ui| {
                     ui.set_min_width(500.0);
                     ui.set_max_width(640.0);
@@ -1234,7 +1663,7 @@ impl CelestineApp {
     ) {
         if self.overlay == Overlay::Settings {
             if naked_button(ui, RichText::new("open vault folder…").color(accent)).clicked() {
-                self.pick_vault_dialog(ctx);
+                self.pick_vault_dialog(&ctx);
                 self.overlay = Overlay::None;
             }
             if naked_button(ui, RichText::new("recent vaults…").color(muted)).clicked() {
@@ -1466,7 +1895,7 @@ impl CelestineApp {
         )
         .clicked()
         {
-            self.pick_vault_dialog(ctx);
+            self.pick_vault_dialog(&ctx);
             self.overlay = Overlay::None;
             return;
         }
@@ -1564,17 +1993,27 @@ impl CelestineApp {
                     Command::ThemePicker,
                     Command::Graph,
                     Command::NewNote,
+                    Command::NewFolder,
+                    Command::Rename,
+                    Command::DeleteItem,
                     Command::Save,
                     Command::TogglePreview,
                     Command::VaultSearch,
                     Command::FontBigger,
                     Command::FontSmaller,
                     Command::FontReset,
+                    Command::ToggleLeftSidebar,
+                    Command::ToggleRightSidebar,
+                    Command::NavBack,
+                    Command::NavForward,
+                    Command::RevealInTree,
                     Command::Settings,
                     Command::Shortcuts,
                     Command::CloseTab,
                     Command::FocusFiles,
                     Command::FocusOutline,
+                    Command::NextTab,
+                    Command::PrevTab,
                 ];
                 for c in cmds {
                     let label = format!("{}  {}", c.label(), self.keymap.display_chord(c));
@@ -1751,6 +2190,9 @@ fn cmd_from_id(id: &str) -> Option<Command> {
         "quick_open" => Command::QuickOpen,
         "graph" => Command::Graph,
         "new_note" => Command::NewNote,
+        "new_folder" => Command::NewFolder,
+        "rename" => Command::Rename,
+        "delete_item" => Command::DeleteItem,
         "save" => Command::Save,
         "toggle_preview" => Command::TogglePreview,
         "vault_search" => Command::VaultSearch,
@@ -1767,6 +2209,13 @@ fn cmd_from_id(id: &str) -> Option<Command> {
         "font_bigger" => Command::FontBigger,
         "font_smaller" => Command::FontSmaller,
         "font_reset" => Command::FontReset,
+        "toggle_left_sidebar" => Command::ToggleLeftSidebar,
+        "toggle_right_sidebar" => Command::ToggleRightSidebar,
+        "nav_back" => Command::NavBack,
+        "nav_forward" => Command::NavForward,
+        "reveal_in_tree" => Command::RevealInTree,
+        "next_tab" => Command::NextTab,
+        "prev_tab" => Command::PrevTab,
         _ => return None,
     })
 }
