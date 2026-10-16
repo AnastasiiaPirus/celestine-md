@@ -1,11 +1,11 @@
-/* CelestineMD theme: obsidian-dark — CSS custom properties */
+/* CelestineMD theme: obsidian-dark — neutral charcoal + violet */
 :root {
-  --background-primary: #1e1e1e;
-  --background-secondary: #252525;
-  --background-modifier-border: #333333;
+  --background-primary: #1a1a1c;
+  --background-secondary: #222226;
+  --background-modifier-border: #3a3a40;
   --text-normal: #dcddde;
-  --text-muted: #999999;
-  --text-accent: #7f6df2;
-  --interactive-accent: #7f6df2;
-  --selection: #3a3a4a;
+  --text-muted: #9a9a9e;
+  --text-accent: #a78bfa;
+  --interactive-accent: #8b5cf6;
+  --selection: #3a3550;
 }

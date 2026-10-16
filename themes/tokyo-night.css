@@ -1,11 +1,11 @@
-/* CelestineMD theme: tokyo-night — CSS custom properties */
+/* CelestineMD theme: tokyo-night — deep indigo night city */
 :root {
-  --background-primary: #1a1b26;
-  --background-secondary: #24283b;
+  --background-primary: #16161e;
+  --background-secondary: #1a1b26;
   --background-modifier-border: #414868;
-  --text-normal: #a9b1d6;
+  --text-normal: #c0caf5;
   --text-muted: #565f89;
-  --text-accent: #7aa2f7;
+  --text-accent: #bb9af7;
   --interactive-accent: #7aa2f7;
   --selection: #292e42;
 }

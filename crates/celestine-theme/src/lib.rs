@@ -61,12 +61,18 @@ pub fn load_theme(name: &str) -> Result<ThemeTokens, String> {
     }
     let dir = find_themes_dir().ok_or_else(|| "themes directory not found".to_string())?;
     let path = dir.join(format!("{name}.css"));
-    load_theme_file(&path)
+    let mut t = load_theme_file(&path)?;
+    t.name = name.to_string();
+    Ok(t)
 }
 
 pub fn load_theme_file(path: &Path) -> Result<ThemeTokens, String> {
     let css = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    Ok(parse_css_vars(&css))
+    let mut t = parse_css_vars(&css);
+    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+        t.name = stem.to_string();
+    }
+    Ok(t)
 }
 
 pub fn list_available_themes() -> Vec<String> {

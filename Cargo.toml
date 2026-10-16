@@ -28,9 +28,10 @@ regex = "1"
 pulldown-cmark = "0.12"
 fuzzy-matcher = "0.3"
 directories = "5"
-eframe = { version = "0.30", default-features = true, features = ["default_fonts", "glow"] }
-egui = "0.30"
-egui_extras = { version = "0.30", features = ["all_loaders"] }
+# 0.37+: system_fonts (default) enables color emoji via the platform emoji font.
+eframe = { version = "0.37", default-features = true, features = ["glow"] }
+egui = "0.37"
+egui_extras = { version = "0.37", features = ["all_loaders"] }
 rfd = "0.15"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 emojis = "0.6"

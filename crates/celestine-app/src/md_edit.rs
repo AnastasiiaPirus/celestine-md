@@ -2,18 +2,6 @@ use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{Color32, FontFamily, FontId, Galley, Ui};
 use std::sync::Arc;
 
-/// Flea-adjacent heading palette (accent + soft secondary hues).
-pub fn heading_color(level: u8, accent: Color32, text: Color32) -> Color32 {
-    match level {
-        1 => accent,
-        2 => Color32::from_rgb(0x7a, 0xc2, 0xf0),
-        3 => Color32::from_rgb(0xb4, 0x9d, 0xeb),
-        4 => Color32::from_rgb(0x9e, 0xce, 0x6a),
-        5 => Color32::from_rgb(0xe0, 0xaf, 0x68),
-        _ => text.gamma_multiply(0.85),
-    }
-}
-
 /// Syntax-tint Markdown source while editing (headings, markers, wikilinks, code).
 pub fn layout(
     ui: &Ui,
@@ -23,6 +11,7 @@ pub fn layout(
     text_color: Color32,
     muted: Color32,
     accent: Color32,
+    headings: &[Color32; 6],
 ) -> Arc<Galley> {
     // Infinite/NaN wrap width disables soft-wrap and causes mid-glyph clipping
     // when the note column is narrower than a source line (sidebars + small window).
@@ -45,7 +34,16 @@ pub fn layout(
     let strong = FontId::new(font_size, FontFamily::Monospace);
 
     for line in text.split_inclusive('\n') {
-        paint_line(&mut job, line, &base, &strong, text_color, muted, accent);
+        paint_line(
+            &mut job,
+            line,
+            &base,
+            &strong,
+            text_color,
+            muted,
+            accent,
+            headings,
+        );
     }
     if text.is_empty() {
         job.append(
@@ -59,7 +57,7 @@ pub fn layout(
         );
     }
 
-    ui.fonts(|f| f.layout_job(job))
+    ui.ctx().fonts_mut(|f| f.layout_job(job))
 }
 
 fn paint_line(
@@ -70,6 +68,7 @@ fn paint_line(
     text_color: Color32,
     muted: Color32,
     accent: Color32,
+    headings: &[Color32; 6],
 ) {
     let trimmed = line.trim_end_matches('\n');
     let newline = if line.ends_with('\n') { "\n" } else { "" };
@@ -78,7 +77,7 @@ fn paint_line(
     if let Some(level) = heading_level(trimmed) {
         let hashes = &trimmed[..level as usize];
         let after = &trimmed[level as usize..];
-        let color = heading_color(level, accent, text_color);
+        let color = headings[(level as usize).saturating_sub(1).min(5)];
         let size = match level {
             1 => base.size * 1.35,
             2 => base.size * 1.22,

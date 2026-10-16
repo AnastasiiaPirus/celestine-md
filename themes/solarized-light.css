@@ -1,11 +1,11 @@
-/* CelestineMD theme: solarized-light — CSS custom properties */
+/* CelestineMD theme: solarized-light — cream paper + teal */
 :root {
   --background-primary: #fdf6e3;
   --background-secondary: #eee8d5;
   --background-modifier-border: #93a1a1;
   --text-normal: #657b83;
-  --text-muted: #93a1a1;
+  --text-muted: #839496;
   --text-accent: #268bd2;
-  --interactive-accent: #2aa198;
+  --interactive-accent: #cb4b16;
   --selection: #eee8d5;
 }

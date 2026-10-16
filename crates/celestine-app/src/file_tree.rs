@@ -41,29 +41,17 @@ pub use crate::icons::FOLDER_ICON_CHOICES;
 pub const TREE_FONT: f32 = 15.6;
 const TREE_ICON: f32 = 14.0;
 
-/// Sibling-index rainbow (reference style): each child of a folder cycles the
-/// palette; nesting does not shift hue — only the index among siblings.
-pub fn folder_rainbow(sibling_index: usize) -> Color32 {
-    const PALETTE: &[Color32] = &[
-        Color32::from_rgb(0xe8, 0x7a, 0x8a), // salmon / pink
-        Color32::from_rgb(0xe8, 0xa0, 0x5c), // orange
-        Color32::from_rgb(0xd4, 0xb8, 0x4a), // golden yellow
-        Color32::from_rgb(0x7a, 0xc4, 0x6e), // leaf green
-        Color32::from_rgb(0x6a, 0xb4, 0xd8), // sky blue
-        Color32::from_rgb(0x9a, 0x8a, 0xd8), // violet
-        Color32::from_rgb(0xd0, 0x6a, 0xb8), // magenta
-        Color32::from_rgb(0xb8, 0x9a, 0x6e), // tan / brown
-        Color32::from_rgb(0x9a, 0x9a, 0xa0), // gray
-        Color32::from_rgb(0xd0, 0x5c, 0x5c), // deep red
-    ];
-    PALETTE[sibling_index % PALETTE.len()]
+/// Color for notes at the vault root (no parent folder) — theme muted, slightly lifted.
+pub fn root_note_color(palette: &crate::theme_apply::ThemePalette) -> Color32 {
+    crate::theme_apply::mix(palette.muted, palette.text, 0.35)
 }
 
-/// Color for notes at the vault root (no parent folder).
-pub const ROOT_NOTE_COLOR: Color32 = Color32::from_rgb(0xb0, 0xb0, 0xb8);
-
 /// Rainbow color of a folder path (last component's sibling index under its parent).
-pub fn color_for_folder(root: &DirNode, folder_path: &str) -> Option<Color32> {
+pub fn color_for_folder(
+    root: &DirNode,
+    folder_path: &str,
+    palette: &crate::theme_apply::ThemePalette,
+) -> Option<Color32> {
     let parts: Vec<&str> = folder_path.split('/').filter(|p| !p.is_empty()).collect();
     if parts.is_empty() {
         return None;
@@ -72,14 +60,18 @@ pub fn color_for_folder(root: &DirNode, folder_path: &str) -> Option<Color32> {
     let mut color = None;
     for part in parts {
         let idx = node.dirs.keys().position(|k| k == part)?;
-        color = Some(folder_rainbow(idx));
+        color = Some(palette.folder_at(idx));
         node = node.dirs.get(part)?;
     }
     color
 }
 
 /// Color a note by the rainbow of its immediate parent folder.
-pub fn color_for_rel(root: &DirNode, rel: &str) -> Color32 {
+pub fn color_for_rel(
+    root: &DirNode,
+    rel: &str,
+    palette: &crate::theme_apply::ThemePalette,
+) -> Color32 {
     let parent = Path::new(rel).parent().and_then(|p| {
         let s = p.to_string_lossy();
         if s.is_empty() || s == "." {
@@ -89,8 +81,8 @@ pub fn color_for_rel(root: &DirNode, rel: &str) -> Color32 {
         }
     });
     match parent {
-        Some(folder) => color_for_folder(root, &folder).unwrap_or(ROOT_NOTE_COLOR),
-        None => ROOT_NOTE_COLOR,
+        Some(folder) => color_for_folder(root, &folder, palette).unwrap_or_else(|| root_note_color(palette)),
+        None => root_note_color(palette),
     }
 }
 
@@ -106,7 +98,7 @@ pub fn show_tree(
     root: &DirNode,
     expanded: &mut HashSet<String>,
     folder_icons: &mut HashMap<String, String>,
-    accent: Color32,
+    palette: &crate::theme_apply::ThemePalette,
     muted: Color32,
     active_rel: Option<&str>,
 ) -> TreeOutcome {
@@ -119,10 +111,10 @@ pub fn show_tree(
         ui,
         root,
         "",
-        ROOT_NOTE_COLOR, // vault-root notes share this; folders below get their own rainbow
+        root_note_color(palette),
         expanded,
         folder_icons,
-        accent,
+        palette,
         muted,
         active_rel,
         &active_ancestors,
@@ -161,7 +153,7 @@ fn show_dir(
     folder_color: Color32,
     expanded: &mut HashSet<String>,
     folder_icons: &mut HashMap<String, String>,
-    accent: Color32,
+    palette: &crate::theme_apply::ThemePalette,
     muted: Color32,
     active_rel: Option<&str>,
     active_ancestors: &HashSet<String>,
@@ -175,8 +167,8 @@ fn show_dir(
         };
         let is_open = expanded.contains(&path);
         let on_path = active_ancestors.contains(&path);
-        // Child folders cycle the rainbow among siblings (not inherited from parent).
-        let own_color = folder_rainbow(sibling_i);
+        // Child folders cycle the theme rainbow among siblings (not inherited from parent).
+        let own_color = palette.folder_at(sibling_i);
         let mut color = own_color;
         if on_path {
             // Brighten ancestors of the open note so the active branch pops.
@@ -207,7 +199,7 @@ fn show_dir(
                 color.gamma_multiply(0.18),
             );
         }
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(row_rect), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
             ui.horizontal(|ui| {
                 ui.set_min_height(row_h);
                 ui.spacing_mut().item_spacing.x = 4.0;
@@ -236,7 +228,7 @@ fn show_dir(
                             folder_icons
                                 .insert(path.clone(), (*mark).to_string());
                             outcome.icons_changed = true;
-                            ui.close_menu();
+                            ui.close();
                         }
                         r.on_hover_text(*mark);
                         if (i + 1) % 6 == 0 {
@@ -255,7 +247,7 @@ fn show_dir(
             {
                 folder_icons.remove(&path);
                 outcome.icons_changed = true;
-                ui.close_menu();
+                ui.close();
             }
         });
 
@@ -269,7 +261,7 @@ fn show_dir(
                     own_color,
                     expanded,
                     folder_icons,
-                    accent,
+                    palette,
                     muted,
                     active_rel,
                     active_ancestors,
@@ -299,7 +291,7 @@ fn show_dir(
                 folder_color.gamma_multiply(0.22),
             );
         }
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(row_rect), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
             ui.horizontal(|ui| {
                 ui.set_min_height(row_h);
                 ui.spacing_mut().item_spacing.x = 4.0;

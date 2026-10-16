@@ -31,14 +31,14 @@ impl HeadingColors {
         }
     }
 
-    fn default_palette(accent: Color32, text: Color32) -> Self {
+    fn from_theme(headings: &[Color32; 6]) -> Self {
         Self {
-            h1: accent,
-            h2: Color32::from_rgb(0x7a, 0xc2, 0xf0),
-            h3: Color32::from_rgb(0xb4, 0x9d, 0xeb),
-            h4: Color32::from_rgb(0x9e, 0xce, 0x6a),
-            h5: Color32::from_rgb(0xe0, 0xaf, 0x68),
-            h6: text.gamma_multiply(0.85),
+            h1: headings[0],
+            h2: headings[1],
+            h3: headings[2],
+            h4: headings[3],
+            h5: headings[4],
+            h6: headings[5],
         }
     }
 }
@@ -85,8 +85,9 @@ pub fn show_preview(
     text: Color32,
     font_size: f32,
     scroll_to_heading: Option<&str>,
+    heading_palette: &[Color32; 6],
 ) -> PreviewOutcome {
-    let headings = HeadingColors::default_palette(accent, text);
+    let headings = HeadingColors::from_theme(heading_palette);
     let prepared = preprocess(body);
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
@@ -375,9 +376,9 @@ pub fn show_preview(
                 Event::End(TagEnd::CodeBlock) => {
                     in_code_block = false;
                     let code = std::mem::take(&mut code_buf);
-                    egui::Frame::none()
+                    egui::Frame::new()
                         .fill(Color32::from_black_alpha(80))
-                        .inner_margin(8.0)
+                        .inner_margin(8)
                         .stroke(Stroke::new(1.0_f32, muted.gamma_multiply(0.4)))
                         .show(ui, |ui| {
                             ui.add(
@@ -401,7 +402,7 @@ pub fn show_preview(
                     in_table = false;
                     if !table_rows.is_empty() {
                         let cols = table_rows.iter().map(|r| r.len()).max().unwrap_or(1);
-                        egui::Grid::new(ui.id().with("md-table"))
+                        egui::Grid::new(ui.scope_id().with("md-table"))
                             .striped(true)
                             .num_columns(cols)
                             .spacing([12.0, 6.0])

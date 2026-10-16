@@ -51,11 +51,11 @@ pub fn show(
     ui: &mut Ui,
     nodes: &[OutlineNode],
     collapsed: &mut HashSet<String>,
-    accent: egui::Color32,
+    headings: &[egui::Color32; 6],
     muted: egui::Color32,
     text: egui::Color32,
 ) -> Option<(usize, String)> {
-    show_nodes(ui, nodes, "", collapsed, accent, muted, text)
+    show_nodes(ui, nodes, "", collapsed, headings, muted, text)
 }
 
 fn show_nodes(
@@ -63,7 +63,7 @@ fn show_nodes(
     nodes: &[OutlineNode],
     prefix: &str,
     collapsed: &mut HashSet<String>,
-    accent: egui::Color32,
+    headings: &[egui::Color32; 6],
     muted: egui::Color32,
     text: egui::Color32,
 ) -> Option<(usize, String)> {
@@ -76,13 +76,10 @@ fn show_nodes(
         };
         let has_kids = !node.children.is_empty();
         let is_open = has_kids && !collapsed.contains(&path);
-        let color = match node.level {
-            1 => accent,
-            2 => egui::Color32::from_rgb(0x7a, 0xc2, 0xf0),
-            3 => egui::Color32::from_rgb(0xb4, 0x9d, 0xeb),
-            4 => egui::Color32::from_rgb(0x9e, 0xce, 0x6a),
-            5 => egui::Color32::from_rgb(0xe0, 0xaf, 0x68),
-            _ => text,
+        let color = if (1..=6).contains(&node.level) {
+            headings[(node.level as usize) - 1]
+        } else {
+            text
         };
 
         ui.horizontal_top(|ui| {
@@ -125,7 +122,7 @@ fn show_nodes(
             ui.indent(format!("outline-{path}"), |ui| {
                 ui.set_max_width(ui.available_width());
                 if let Some(j) =
-                    show_nodes(ui, &node.children, &path, collapsed, accent, muted, text)
+                    show_nodes(ui, &node.children, &path, collapsed, headings, muted, text)
                 {
                     jump = Some(j);
                 }

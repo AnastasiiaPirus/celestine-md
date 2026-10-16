@@ -1,11 +1,11 @@
-/* CelestineMD theme: gruvbox-dark — CSS custom properties */
+/* CelestineMD theme: gruvbox-dark — warm earth tones */
 :root {
-  --background-primary: #282828;
-  --background-secondary: #3c3836;
+  --background-primary: #1d2021;
+  --background-secondary: #282828;
   --background-modifier-border: #504945;
   --text-normal: #ebdbb2;
   --text-muted: #a89984;
   --text-accent: #fe8019;
-  --interactive-accent: #83a598;
-  --selection: #504945;
+  --interactive-accent: #d65d0e;
+  --selection: #3c3836;
 }

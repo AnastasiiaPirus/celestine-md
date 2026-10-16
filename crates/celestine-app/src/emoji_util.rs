@@ -14,8 +14,8 @@ pub fn expand_shortcodes(input: &str) -> String {
     for cap in shortcode_re().captures_iter(input) {
         let m = cap.get(0).unwrap();
         out.push_str(&input[last..m.start()]);
-        let name = cap.get(1).unwrap().as_str();
-        if let Some(emoji) = emojis::get_by_shortcode(name) {
+        let name = cap.get(1).unwrap().as_str().to_ascii_lowercase();
+        if let Some(emoji) = emojis::get_by_shortcode(&name) {
             out.push_str(emoji.as_str());
         } else {
             out.push_str(m.as_str());

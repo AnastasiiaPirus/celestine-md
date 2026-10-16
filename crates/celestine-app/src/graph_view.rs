@@ -1,11 +1,12 @@
 use crate::file_tree;
-use celestine_core::{NoteId, Vault, VaultIndex};
-use egui::{pos2, Color32, Pos2, Rect, Sense, Stroke, Ui, Vec2};
-use std::collections::HashMap;
+use celestine_core::{NoteId, Vault};
+use egui::{pos2, Color32, FontId, Pos2, Rect, Sense, Stroke, Ui, Vec2};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-/// How long (seconds) the force layout runs after open / topology change.
-const SETTLE_SECS: f32 = 0.85;
+/// Force layout runs briefly after open / topology change, then freezes.
+const SETTLE_SECS: f32 = 1.6;
+const SIM_ITERS: usize = 4;
 
 #[derive(Default)]
 pub struct GraphState {
@@ -15,12 +16,14 @@ pub struct GraphState {
     pub pan: Vec2,
     pub zoom: f32,
     initialized: bool,
-    /// Remaining settle time; physics only runs while > 0.
     settle_t: f32,
     last_node_count: usize,
     last_local: bool,
     last_depth: usize,
     last_center: Option<NoteId>,
+    hovered: Option<NoteId>,
+    /// World-space anchors for topic clusters (top-level folder).
+    cluster_centers: HashMap<String, Pos2>,
 }
 
 impl GraphState {
@@ -32,9 +35,10 @@ impl GraphState {
         }
     }
 
-    /// Kick a fresh layout burst (e.g. when opening the graph view).
     pub fn restart_layout(&mut self) {
         self.initialized = false;
+        self.positions.clear();
+        self.cluster_centers.clear();
         self.settle_t = SETTLE_SECS;
     }
 
@@ -45,7 +49,8 @@ impl GraphState {
         center: Option<NoteId>,
         accent: Color32,
         muted: Color32,
-        _text: Color32,
+        text: Color32,
+        palette: &crate::theme_apply::ThemePalette,
     ) -> Option<String> {
         let mut open = None;
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
@@ -56,7 +61,7 @@ impl GraphState {
         }
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll != 0.0 {
-            self.zoom = (self.zoom * (1.0 + scroll * 0.001)).clamp(0.4, 3.0);
+            self.zoom = (self.zoom * (1.0 + scroll * 0.0015)).clamp(0.35, 3.5);
         }
 
         let nodes: Vec<NoteId> = if self.local_mode {
@@ -68,16 +73,22 @@ impl GraphState {
         } else {
             vault.graph.node_ids()
         };
+        let visible: HashSet<NoteId> = nodes.iter().copied().collect();
 
         let topology_changed = !self.initialized
-            || self.positions.len() != vault.index.len()
             || self.last_node_count != nodes.len()
             || self.last_local != self.local_mode
             || self.last_depth != self.depth
-            || self.last_center != center;
+            || (self.local_mode && self.last_center != center);
 
         if topology_changed {
-            layout_circle(&mut self.positions, &vault.index, &nodes, rect.center());
+            seed_cluster_layout(
+                &mut self.positions,
+                &mut self.cluster_centers,
+                vault,
+                &nodes,
+                rect,
+            );
             self.initialized = true;
             self.settle_t = SETTLE_SECS;
             self.last_node_count = nodes.len();
@@ -86,31 +97,73 @@ impl GraphState {
             self.last_center = center;
         }
 
-        // Burst of force-directed motion, then freeze — no continuous drift.
         if self.settle_t > 0.0 {
             let dt = ui.input(|i| i.stable_dt).clamp(1.0 / 120.0, 1.0 / 30.0);
             let progress = 1.0 - (self.settle_t / SETTLE_SECS).clamp(0.0, 1.0);
-            // Strong push early so nodes spread quickly, then ease to zero.
-            let strength = (1.0 - progress).powf(1.4);
-            settle(
-                &mut self.positions,
-                vault,
-                &nodes,
-                rect,
-                dt * 2.2 * strength,
-            );
+            let strength = (1.0 - progress).powf(1.15);
+            for _ in 0..SIM_ITERS {
+                settle_clustered(
+                    &mut self.positions,
+                    &mut self.cluster_centers,
+                    vault,
+                    &nodes,
+                    rect,
+                    dt * 1.8 * strength,
+                );
+            }
             self.settle_t = (self.settle_t - dt).max(0.0);
             ui.ctx().request_repaint();
         }
 
-        // Folder rainbow colors matching the file tree.
         let mut paths = vault.list_md_rel_paths();
         paths.sort();
         let tree = file_tree::build_tree(&paths);
 
-        let edges = vault.graph.all_edges();
-        for (a, b) in edges {
-            if !nodes.contains(&a) || !nodes.contains(&b) {
+        // --- cluster halos + topic labels (behind edges/nodes) ---
+        let cluster_members = group_by_cluster(vault, &nodes);
+        for (key, members) in &cluster_members {
+            if members.len() < 2 {
+                continue;
+            }
+            let Some(centroid) = cluster_centroid(&self.positions, members) else {
+                continue;
+            };
+            let screen = map(centroid, rect.center(), self.pan, self.zoom);
+            let spread = cluster_spread(&self.positions, members).max(40.0) * self.zoom;
+            let color = cluster_color(&tree, key, palette);
+            painter.circle_filled(
+                screen,
+                spread * 0.85,
+                Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 22),
+            );
+            painter.circle_stroke(
+                screen,
+                spread * 0.85,
+                Stroke::new(
+                    1.0_f32,
+                    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 50),
+                ),
+            );
+            let label = if key == "_root" {
+                "vault root".to_string()
+            } else {
+                key.clone()
+            };
+            painter.text(
+                screen + Vec2::new(0.0, -spread * 0.85 - 6.0),
+                egui::Align2::CENTER_BOTTOM,
+                label,
+                FontId::monospace((12.0 * self.zoom.sqrt()).clamp(11.0, 16.0)),
+                Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 200),
+            );
+        }
+
+        // --- edges (dim; highlight those touching the active note) ---
+        let active_neighbors: HashSet<NoteId> = center
+            .map(|c| vault.graph.neighbors(c).into_iter().collect())
+            .unwrap_or_default();
+        for (a, b) in vault.graph.all_edges() {
+            if !visible.contains(&a) || !visible.contains(&b) {
                 continue;
             }
             let Some(&pa) = self.positions.get(&a) else {
@@ -119,13 +172,36 @@ impl GraphState {
             let Some(&pb) = self.positions.get(&b) else {
                 continue;
             };
-            let pa = map(pa, rect.center(), self.pan, self.zoom);
-            let pb = map(pb, rect.center(), self.pan, self.zoom);
-            let edge_c = Color32::from_rgba_unmultiplied(muted.r(), muted.g(), muted.b(), 150);
-            painter.line_segment([pa, pb], Stroke::new(1.0_f32, edge_c));
+            let sa = map(pa, rect.center(), self.pan, self.zoom);
+            let sb = map(pb, rect.center(), self.pan, self.zoom);
+            let touches_active = center == Some(a)
+                || center == Some(b)
+                || active_neighbors.contains(&a)
+                || active_neighbors.contains(&b);
+            let (w, alpha) = if touches_active {
+                (1.6_f32, 160_u8)
+            } else {
+                (1.0_f32, 55_u8)
+            };
+            painter.line_segment(
+                [sa, sb],
+                Stroke::new(
+                    w,
+                    Color32::from_rgba_unmultiplied(muted.r(), muted.g(), muted.b(), alpha),
+                ),
+            );
         }
 
-        for id in &nodes {
+        // --- nodes ---
+        self.hovered = None;
+        let pointer = response.hover_pos();
+        let show_all_labels = self.zoom >= 1.05 || nodes.len() <= 40;
+
+        // Draw small nodes first so hubs sit on top.
+        let mut order = nodes.clone();
+        order.sort_by_key(|id| vault.graph.degree(*id));
+
+        for id in &order {
             let Some(meta) = vault.index.get(*id) else {
                 continue;
             };
@@ -133,39 +209,99 @@ impl GraphState {
                 continue;
             };
             let screen = map(p, rect.center(), self.pan, self.zoom);
-            let deg = vault.graph.degree(*id).max(1) as f32;
-            let r = (4.0 + deg.sqrt() * 3.0) * self.zoom;
+            let deg = vault.graph.degree(*id) as f32;
+            let r = ((5.5 + deg.sqrt() * 4.2) * self.zoom).clamp(4.0, 28.0);
             let is_center = center == Some(*id);
-            let folder_c = file_tree::color_for_rel(&tree, &meta.rel);
-            let fill = if is_center {
-                accent
-            } else {
-                folder_c
-            };
-            painter.circle_filled(screen, r, fill);
-            if is_center {
-                painter.circle_stroke(screen, r + 2.0, Stroke::new(1.5_f32, accent));
+            let folder_c = file_tree::color_for_rel(&tree, &meta.rel, palette);
+            let fill = if is_center { accent } else { folder_c };
+
+            let hit = Rect::from_center_size(screen, Vec2::splat(r * 2.8));
+            let hovering = pointer.is_some_and(|pos| hit.contains(pos));
+            if hovering {
+                self.hovered = Some(*id);
             }
-            painter.text(
-                screen + Vec2::new(r + 4.0, -6.0),
-                egui::Align2::LEFT_TOP,
-                Path::new(&meta.rel)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| meta.rel.clone()),
-                egui::FontId::monospace(11.0),
-                muted,
+
+            // Soft glow for hubs / active / hover
+            if is_center || hovering || deg >= 3.0 {
+                painter.circle_filled(
+                    screen,
+                    r * 1.7,
+                    Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), 40),
+                );
+            }
+            painter.circle_filled(screen, r, fill);
+            painter.circle_stroke(
+                screen,
+                r,
+                Stroke::new(
+                    if is_center || hovering {
+                        2.0_f32
+                    } else {
+                        1.0_f32
+                    },
+                    if is_center {
+                        text
+                    } else {
+                        Color32::from_rgba_unmultiplied(0, 0, 0, 90)
+                    },
+                ),
             );
-            let hit = Rect::from_center_size(screen, Vec2::splat(r * 2.5));
-            if response.clicked()
-                && hit.contains(response.interact_pointer_pos().unwrap_or(Pos2::ZERO))
-            {
+
+            let title = Path::new(&meta.rel)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| meta.rel.clone());
+
+            let label_here = show_all_labels
+                || hovering
+                || is_center
+                || deg >= 4.0
+                || self.zoom >= 1.4;
+            if label_here {
+                let label_c = if hovering || is_center {
+                    text
+                } else {
+                    Color32::from_rgba_unmultiplied(
+                        folder_c.r().saturating_add(40).min(255),
+                        folder_c.g().saturating_add(40).min(255),
+                        folder_c.b().saturating_add(40).min(255),
+                        230,
+                    )
+                };
+                painter.text(
+                    screen + Vec2::new(r + 5.0, -7.0),
+                    egui::Align2::LEFT_TOP,
+                    title,
+                    FontId::monospace((11.5 * self.zoom.sqrt()).clamp(10.0, 15.0)),
+                    label_c,
+                );
+            }
+
+            if response.clicked() && hovering {
                 open = Some(meta.rel.clone());
             }
         }
 
+        // Hover card
+        if let Some(hid) = self.hovered {
+            if let Some(meta) = vault.index.get(hid) {
+                if let Some(&p) = self.positions.get(&hid) {
+                    let screen = map(p, rect.center(), self.pan, self.zoom);
+                    let deg = vault.graph.degree(hid);
+                    let tip = format!("{}  ·  {} links", meta.rel, deg);
+                    painter.text(
+                        screen + Vec2::new(0.0, 18.0 * self.zoom),
+                        egui::Align2::CENTER_TOP,
+                        tip,
+                        FontId::monospace(11.0),
+                        muted,
+                    );
+                }
+            }
+        }
+
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("── graph ──").monospace());
+            ui.label(egui::RichText::new("── graph ──").monospace().color(accent));
             if ui
                 .selectable_label(!self.local_mode, "global")
                 .clicked()
@@ -178,9 +314,15 @@ impl GraphState {
             if self.local_mode {
                 ui.add(egui::Slider::new(&mut self.depth, 1..=4).text("depth"));
             }
+            ui.label(
+                egui::RichText::new("drag pan · scroll zoom · click open")
+                    .monospace()
+                    .size(11.0)
+                    .color(muted),
+            );
             if self.settle_t > 0.0 {
                 ui.label(
-                    egui::RichText::new("settling…")
+                    egui::RichText::new("clustering…")
                         .monospace()
                         .size(11.0)
                         .color(muted),
@@ -196,39 +338,124 @@ fn map(p: Pos2, center: Pos2, pan: Vec2, zoom: f32) -> Pos2 {
     center + (p.to_vec2() - center.to_vec2()) * zoom + pan
 }
 
-fn layout_circle(
-    positions: &mut HashMap<NoteId, Pos2>,
-    index: &VaultIndex,
-    visible: &[NoteId],
-    center: Pos2,
-) {
-    positions.retain(|id, _| index.get(*id).is_some());
-
-    // Place any node that lacks a position onto a compact ring; settle expands it.
-    let missing: Vec<NoteId> = visible
-        .iter()
-        .copied()
-        .filter(|id| !positions.contains_key(id))
+/// Top-level folder name, or `_root` for vault-root notes.
+fn cluster_key(rel: &str) -> String {
+    let path = Path::new(rel);
+    let comps: Vec<_> = path
+        .components()
+        .filter_map(|c| {
+            let s = c.as_os_str().to_string_lossy();
+            if s == "." || s.is_empty() {
+                None
+            } else {
+                Some(s.into_owned())
+            }
+        })
         .collect();
-    if missing.is_empty() {
-        return;
-    }
-    let n = missing.len() as f32;
-    let radius = 48.0 + (visible.len() as f32).sqrt() * 12.0;
-    for (i, id) in missing.iter().enumerate() {
-        let ang = (i as f32) / n.max(1.0) * std::f32::consts::TAU + 0.15;
-        positions.insert(
-            *id,
-            pos2(
-                center.x + radius * ang.cos(),
-                center.y + radius * ang.sin(),
-            ),
-        );
+    if comps.len() <= 1 {
+        "_root".into()
+    } else {
+        comps[0].clone()
     }
 }
 
-fn settle(
+fn group_by_cluster(vault: &Vault, nodes: &[NoteId]) -> HashMap<String, Vec<NoteId>> {
+    let mut map: HashMap<String, Vec<NoteId>> = HashMap::new();
+    for &id in nodes {
+        if let Some(meta) = vault.index.get(id) {
+            map.entry(cluster_key(&meta.rel)).or_default().push(id);
+        }
+    }
+    map
+}
+
+fn cluster_color(
+    tree: &file_tree::DirNode,
+    key: &str,
+    palette: &crate::theme_apply::ThemePalette,
+) -> Color32 {
+    if key == "_root" {
+        file_tree::root_note_color(palette)
+    } else {
+        file_tree::color_for_folder(tree, key, palette)
+            .unwrap_or_else(|| file_tree::root_note_color(palette))
+    }
+}
+
+fn cluster_centroid(positions: &HashMap<NoteId, Pos2>, members: &[NoteId]) -> Option<Pos2> {
+    let mut sum = Vec2::ZERO;
+    let mut n = 0.0;
+    for id in members {
+        if let Some(p) = positions.get(id) {
+            sum += p.to_vec2();
+            n += 1.0;
+        }
+    }
+    if n < 1.0 {
+        None
+    } else {
+        Some(Pos2::new(sum.x / n, sum.y / n))
+    }
+}
+
+fn cluster_spread(positions: &HashMap<NoteId, Pos2>, members: &[NoteId]) -> f32 {
+    let Some(c) = cluster_centroid(positions, members) else {
+        return 40.0;
+    };
+    let mut max_d = 0.0_f32;
+    for id in members {
+        if let Some(p) = positions.get(id) {
+            max_d = max_d.max((*p - c).length());
+        }
+    }
+    max_d.max(30.0)
+}
+
+/// Place each topic on a ring, notes jittered near their topic anchor.
+fn seed_cluster_layout(
     positions: &mut HashMap<NoteId, Pos2>,
+    cluster_centers: &mut HashMap<String, Pos2>,
+    vault: &Vault,
+    visible: &[NoteId],
+    view: Rect,
+) {
+    positions.retain(|id, _| vault.index.get(*id).is_some());
+    let groups = group_by_cluster(vault, visible);
+    let mut keys: Vec<String> = groups.keys().cloned().collect();
+    keys.sort();
+    let n = keys.len().max(1) as f32;
+    let center = view.center();
+    let ring = (view.width().min(view.height()) * 0.28).clamp(120.0, 280.0);
+
+    cluster_centers.clear();
+    for (i, key) in keys.iter().enumerate() {
+        let ang = (i as f32) / n * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+        let c = pos2(center.x + ring * ang.cos(), center.y + ring * ang.sin());
+        cluster_centers.insert(key.clone(), c);
+
+        let members = &groups[key];
+        let m = members.len().max(1) as f32;
+        let local_r = 18.0 + m.sqrt() * 14.0;
+        for (j, id) in members.iter().enumerate() {
+            if positions.contains_key(id) {
+                continue;
+            }
+            let a = (j as f32) / m * std::f32::consts::TAU + i as f32 * 0.3;
+            let jitter = 0.35 + (j as f32 * 0.17) % 0.65;
+            positions.insert(
+                *id,
+                pos2(
+                    c.x + local_r * jitter * a.cos(),
+                    c.y + local_r * jitter * a.sin(),
+                ),
+            );
+        }
+    }
+}
+
+fn settle_clustered(
+    positions: &mut HashMap<NoteId, Pos2>,
+    cluster_centers: &mut HashMap<String, Pos2>,
     vault: &Vault,
     visible: &[NoteId],
     view: Rect,
@@ -237,39 +464,113 @@ fn settle(
     if dt <= 0.0 || visible.is_empty() {
         return;
     }
-    let ids = visible;
+
+    // Refresh cluster anchors from member centroids (smooth follow).
+    let groups = group_by_cluster(vault, visible);
+    for (key, members) in &groups {
+        if let Some(c) = cluster_centroid(positions, members) {
+            let entry = cluster_centers.entry(key.clone()).or_insert(c);
+            *entry = Pos2::new(
+                entry.x * 0.7 + c.x * 0.3,
+                entry.y * 0.7 + c.y * 0.3,
+            );
+        }
+    }
+
     let mut forces: HashMap<NoteId, Vec2> = HashMap::new();
-    for &id in ids {
+    for &id in visible {
         forces.insert(id, Vec2::ZERO);
     }
 
-    // Soft pull toward view center so the cloud stays on screen.
-    let center = view.center();
-    for &id in ids {
+    let view_c = view.center();
+
+    // Pull each note toward its topic cluster (forms the readable groups).
+    for &id in visible {
+        let Some(meta) = vault.index.get(id) else {
+            continue;
+        };
+        let key = cluster_key(&meta.rel);
+        let Some(&anchor) = cluster_centers.get(&key) else {
+            continue;
+        };
         let Some(&p) = positions.get(&id) else {
             continue;
         };
-        let to_c = center - p;
-        *forces.get_mut(&id).unwrap() += to_c * 0.08 * dt;
+        *forces.get_mut(&id).unwrap() += (anchor - p) * 0.22 * dt;
     }
 
-    // Repulsion between visible nodes
-    for i in 0..ids.len() {
-        for j in (i + 1)..ids.len() {
-            let a = ids[i];
-            let b = ids[j];
+    // Soft gravity to keep the whole map framed.
+    for &id in visible {
+        let Some(&p) = positions.get(&id) else {
+            continue;
+        };
+        *forces.get_mut(&id).unwrap() += (view_c - p) * 0.03 * dt;
+    }
+
+    // Cluster anchors repel each other so topics stay separated.
+    let anchors: Vec<(String, Pos2)> = cluster_centers
+        .iter()
+        .map(|(k, p)| (k.clone(), *p))
+        .collect();
+    for i in 0..anchors.len() {
+        for j in (i + 1)..anchors.len() {
+            let (_, pa) = anchors[i];
+            let (_, pb) = anchors[j];
+            let mut d = pa - pb;
+            let dist = d.length().max(40.0);
+            d /= dist;
+            let push = d * (55_000.0 / (dist * dist)) * dt;
+            // Apply half of the inter-cluster push to member notes.
+            if let Some(ma) = groups.get(&anchors[i].0) {
+                let share = push / ma.len().max(1) as f32;
+                for id in ma {
+                    if let Some(f) = forces.get_mut(id) {
+                        *f += share;
+                    }
+                }
+            }
+            if let Some(mb) = groups.get(&anchors[j].0) {
+                let share = push / mb.len().max(1) as f32;
+                for id in mb {
+                    if let Some(f) = forces.get_mut(id) {
+                        *f -= share;
+                    }
+                }
+            }
+        }
+    }
+
+    // Node repulsion (stronger when close).
+    for i in 0..visible.len() {
+        for j in (i + 1)..visible.len() {
+            let a = visible[i];
+            let b = visible[j];
             let pa = positions[&a];
             let pb = positions[&b];
             let mut d = pa - pb;
-            let dist = d.length().max(12.0);
+            let dist = d.length().max(10.0);
             d /= dist;
-            let f = d * (14_000.0 / (dist * dist)) * dt;
+            let same_cluster = {
+                let ka = vault
+                    .index
+                    .get(a)
+                    .map(|m| cluster_key(&m.rel))
+                    .unwrap_or_default();
+                let kb = vault
+                    .index
+                    .get(b)
+                    .map(|m| cluster_key(&m.rel))
+                    .unwrap_or_default();
+                ka == kb
+            };
+            let k = if same_cluster { 9_000.0 } else { 18_000.0 };
+            let f = d * (k / (dist * dist)) * dt;
             *forces.get_mut(&a).unwrap() += f;
             *forces.get_mut(&b).unwrap() -= f;
         }
     }
 
-    // Attraction along edges (visible endpoints only)
+    // Link springs — ideal length shorter inside a cluster, longer across topics.
     for (a, b) in vault.graph.all_edges() {
         if !forces.contains_key(&a) || !forces.contains_key(&b) {
             continue;
@@ -280,11 +581,24 @@ fn settle(
         let Some(&pb) = positions.get(&b) else {
             continue;
         };
+        let same = {
+            let ka = vault
+                .index
+                .get(a)
+                .map(|m| cluster_key(&m.rel))
+                .unwrap_or_default();
+            let kb = vault
+                .index
+                .get(b)
+                .map(|m| cluster_key(&m.rel))
+                .unwrap_or_default();
+            ka == kb
+        };
         let mut d = pb - pa;
         let dist = d.length().max(1.0);
         d /= dist;
-        let ideal = 100.0;
-        let f = d * (dist - ideal) * 0.04 * dt;
+        let ideal = if same { 52.0 } else { 140.0 };
+        let f = d * (dist - ideal) * 0.055 * dt;
         if let Some(fa) = forces.get_mut(&a) {
             *fa += f;
         }
@@ -293,7 +607,8 @@ fn settle(
         }
     }
 
-    let max_step = 28.0 * dt.max(0.05);
+    let max_step = 22.0 * dt.max(0.04);
+    let pad = 36.0;
     for (id, f) in forces {
         if let Some(p) = positions.get_mut(&id) {
             let step = if f.length() > max_step {
@@ -302,8 +617,6 @@ fn settle(
                 f
             };
             *p += step;
-            // Keep inside a padded view box in world space (pre-zoom).
-            let pad = 40.0;
             p.x = p.x.clamp(view.left() + pad, view.right() - pad);
             p.y = p.y.clamp(view.top() + pad, view.bottom() - pad);
         }

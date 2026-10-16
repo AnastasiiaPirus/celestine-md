@@ -246,6 +246,8 @@ impl CelestineApp {
             .map(|n| n.content.clone())
             .or_else(|| vault.read_note_content(rel).ok())
             .unwrap_or_default();
+        // Resolve :shortcode: → Unicode so the editor paints real emoji glyphs.
+        let content = crate::emoji_util::expand_shortcodes(&content);
 
         if push_nav {
             if let Some(cur) = self.tabs.get(self.active_tab) {
@@ -441,7 +443,8 @@ fn chrono_lite_stamp() -> String {
 }
 
 impl eframe::App for CelestineApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         let dt = self.last_frame.elapsed().as_secs_f32();
         self.last_frame = Instant::now();
         // Overlay fade-in
@@ -461,15 +464,16 @@ impl eframe::App for CelestineApp {
             self.handle_command(cmd, ctx);
         }
 
-        let accent = color(self.theme.interactive_accent);
-        let muted = color(self.theme.text_muted);
-        let text_c = color(self.theme.text_normal);
+        let palette = theme_apply::ThemePalette::from_tokens(&self.theme);
+        let accent = palette.accent;
+        let muted = palette.muted;
+        let text_c = palette.text;
 
         // Top bar — flea chrome: path/brand left, naked icons right
-        egui::TopBottomPanel::top("top")
-            .exact_height(36.0)
-            .frame(theme_apply::panel_frame(ctx))
-            .show(ctx, |ui| {
+        egui::Panel::top("top")
+            .exact_size(36.0)
+            .frame(theme_apply::panel_frame(&ctx))
+            .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.label(RichText::new("celestine").strong().color(accent));
                     if let Some(v) = &self.vault {
@@ -545,10 +549,10 @@ impl eframe::App for CelestineApp {
 
         // Tabs strip
         if !self.tabs.is_empty() {
-            egui::TopBottomPanel::top("tabs")
-                .exact_height(30.0)
-                .frame(theme_apply::panel_frame(ctx))
-                .show(ctx, |ui| {
+            egui::Panel::top("tabs")
+                .exact_size(30.0)
+                .frame(theme_apply::panel_frame(&ctx))
+                .show(ui, |ui| {
                     ui.horizontal_centered(|ui| {
                         let mut switch_to = None;
                         let mut close_i = None;
@@ -597,7 +601,7 @@ impl eframe::App for CelestineApp {
         }
 
         // Footer cheat strip
-        egui::TopBottomPanel::bottom("foot").show(ctx, |ui| {
+        egui::Panel::bottom("foot").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(&self.status).monospace().color(muted));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -626,10 +630,10 @@ impl eframe::App for CelestineApp {
 
         // Left: files (collapsible like Obsidian)
         if self.persist.show_left_sidebar {
-            egui::SidePanel::left("files")
-                .default_width(220.0)
-                .frame(theme_apply::panel_frame(ctx))
-                .show(ctx, |ui| {
+            egui::Panel::left("files")
+                .default_size(220.0)
+                .frame(theme_apply::panel_frame(&ctx))
+                .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
                             RichText::new("FILES")
@@ -668,7 +672,7 @@ impl eframe::App for CelestineApp {
                                     &tree,
                                     &mut self.tree_expanded,
                                     &mut self.folder_icons,
-                                    accent,
+                                    &palette,
                                     muted,
                                     active,
                                 )
@@ -707,12 +711,12 @@ impl eframe::App for CelestineApp {
 
         // Right: outline + backlinks
         if self.persist.show_right_sidebar {
-            egui::SidePanel::right("meta")
-                .default_width(220.0)
-                .min_width(160.0)
-                .max_width(360.0)
-                .frame(theme_apply::panel_frame(ctx))
-                .show(ctx, |ui| {
+            egui::Panel::right("meta")
+                .default_size(220.0)
+                .min_size(160.0)
+                .max_size(360.0)
+                .frame(theme_apply::panel_frame(&ctx))
+                .show(ui, |ui| {
                     ui.set_max_width(ui.available_width());
                     ui.horizontal(|ui| {
                         ui.label(
@@ -749,7 +753,7 @@ impl eframe::App for CelestineApp {
                                         ui,
                                         &tree,
                                         &mut self.outline_collapsed,
-                                        accent,
+                                        &palette.heading,
                                         muted,
                                         text_c,
                                     );
@@ -797,7 +801,7 @@ impl eframe::App for CelestineApp {
         // Center
         egui::CentralPanel::default()
             .frame(theme_apply::content_frame(&self.theme))
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
             if self.show_graph {
                 ui.label(
                     RichText::new(format!(
@@ -811,7 +815,7 @@ impl eframe::App for CelestineApp {
                     let center = self.active_note_id();
                     if let Some(rel) =
                         self.graph
-                            .show(ui, vault, center, accent, muted, text_c)
+                            .show(ui, vault, center, accent, muted, text_c, &palette)
                     {
                         self.open_note(&rel, true);
                         self.show_graph = false;
@@ -892,12 +896,9 @@ impl eframe::App for CelestineApp {
 
                 // Pin stats to the bottom of the note pane; editor/preview fills the rest.
                 let stats_h = 24.0_f32;
-                egui::TopBottomPanel::bottom("note-stats")
-                    .exact_height(stats_h)
-                    .frame(
-                        egui::Frame::none()
-                            .inner_margin(egui::Margin::symmetric(0.0, 2.0)),
-                    )
+                egui::Panel::bottom("note-stats")
+                    .exact_size(stats_h)
+                    .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(0, 2)))
                     .show_inside(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(
@@ -955,6 +956,7 @@ impl eframe::App for CelestineApp {
                                                 text_c,
                                                 md_font,
                                                 scroll_heading.as_deref(),
+                                                &palette.heading,
                                             )
                                         },
                                     )
@@ -1023,8 +1025,12 @@ impl eframe::App for CelestineApp {
                             ui.horizontal(|ui| {
                                 // Manual gaps only — avoid item_spacing blowing past inner_w.
                                 ui.spacing_mut().item_spacing.x = 0.0;
+                                let headings = palette.heading;
                                 let mut layouter =
-                                    |ui: &egui::Ui, text: &str, wrap_width: f32| {
+                                    |ui: &egui::Ui,
+                                     text: &dyn egui::TextBuffer,
+                                     wrap_width: f32| {
+                                        let text = text.as_str();
                                         let w = if wrap_width.is_finite()
                                             && wrap_width > 1.0
                                         {
@@ -1033,7 +1039,14 @@ impl eframe::App for CelestineApp {
                                             text_w
                                         };
                                         md_edit::layout(
-                                            ui, text, w, md_font, text_c, muted, accent,
+                                            ui,
+                                            text,
+                                            w,
+                                            md_font,
+                                            text_c,
+                                            muted,
+                                            accent,
+                                            &headings,
                                         )
                                     };
 
@@ -1051,7 +1064,7 @@ impl eframe::App for CelestineApp {
                                 )
                                 .id(text_id)
                                 .font(font)
-                                .frame(false)
+                                .frame(egui::Frame::NONE)
                                 .desired_width(text_w)
                                 .desired_rows(desired_rows)
                                 .layouter(&mut layouter);
@@ -1090,6 +1103,11 @@ impl eframe::App for CelestineApp {
                         .inner;
                     self.editor_focused = focused;
                     if changed {
+                        let expanded =
+                            crate::emoji_util::expand_shortcodes(&self.tabs[tab_idx].buffer);
+                        if expanded != self.tabs[tab_idx].buffer {
+                            self.tabs[tab_idx].buffer = expanded;
+                        }
                         self.tabs[tab_idx].dirty = true;
                     }
                 }
@@ -1148,7 +1166,7 @@ impl CelestineApp {
             .interactable(true)
             .sense(egui::Sense::click())
             .show(ctx, |ui| {
-                let screen = ctx.screen_rect();
+                let screen = ctx.content_rect();
                 let resp = ui.allocate_response(screen.size(), egui::Sense::click());
                 ui.painter().rect_filled(
                     screen,
@@ -1710,7 +1728,7 @@ fn paint_line_numbers(
     let mut at_line_start = true;
     for row in &galley.rows {
         if at_line_start {
-            let y = galley_pos.y + row.rect.min.y;
+            let y = galley_pos.y + row.rect().min.y;
             painter.text(
                 egui::pos2(gutter_rect.right() - 4.0, y),
                 egui::Align2::RIGHT_TOP,

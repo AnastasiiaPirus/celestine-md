@@ -1,7 +1,7 @@
-/* CelestineMD theme: dracula — CSS custom properties */
+/* CelestineMD theme: dracula — neon pink / purple */
 :root {
-  --background-primary: #282a36;
-  --background-secondary: #21222c;
+  --background-primary: #21222c;
+  --background-secondary: #282a36;
   --background-modifier-border: #44475a;
   --text-normal: #f8f8f2;
   --text-muted: #6272a4;
