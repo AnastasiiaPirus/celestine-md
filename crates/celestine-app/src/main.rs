@@ -11,6 +11,7 @@ mod outline_tree;
 mod preview;
 mod state;
 mod theme_apply;
+mod update_check;
 
 use app::CelestineApp;
 

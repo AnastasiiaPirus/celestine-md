@@ -1,5 +1,16 @@
 # Cutting a CelestineMD release
 
+## Versioning & in-app notices
+
+CelestineMD uses `MAJOR.MINOR.PATCH` (e.g. `0.2.0`):
+
+| Bump | Use for | In-app “update available” |
+|------|---------|---------------------------|
+| **MINOR** (or MAJOR) | Feature / bigger functionality | Yes — banner links to GitHub Releases |
+| **PATCH** | Bugfixes / small improvements | No |
+
+The app compares the running build to the latest GitHub release and notifies only when the feature line (`MAJOR.MINOR`) advances. Set `CELESTINE_NO_UPDATE=1` to disable the check.
+
 ## What this repo automates
 
 GitHub Actions (`.github/workflows/release.yml`) builds **Linux**, **macOS** (Intel + Apple Silicon), and **Windows** archives when you push a version tag (`v0.1.0`, …).

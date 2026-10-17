@@ -17,6 +17,7 @@ eframe = { workspace = true }
 egui = { workspace = true }
 egui_extras = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 toml = { workspace = true }
 directories = { workspace = true }
 fuzzy-matcher = { workspace = true }
@@ -25,3 +26,4 @@ image = { workspace = true }
 pulldown-cmark = { workspace = true }
 regex = { workspace = true }
 emojis = { workspace = true }
+ureq = { workspace = true }

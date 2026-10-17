@@ -6,6 +6,7 @@ use crate::outline_tree;
 use crate::preview;
 use crate::state::AppState;
 use crate::theme_apply::{self, color, naked_button, naked_icon, sidebar_toggle};
+use crate::update_check::UpdateChecker;
 use celestine_core::{extract_note_data, NoteId, Vault};
 use celestine_theme::{list_available_themes, load_theme, ThemeTokens};
 use egui::text::{CCursor, CCursorRange};
@@ -92,6 +93,10 @@ pub struct CelestineApp {
     folder_icons: HashMap<String, String>,
     /// Most-recently-opened notes/images in the current vault (newest first).
     recent_notes: Vec<String>,
+    /// Background GitHub release check (feature-line bumps only).
+    update_checker: UpdateChecker,
+    /// Hide the update banner for this session after dismiss/open.
+    update_banner_hidden: bool,
 }
 
 impl CelestineApp {
@@ -149,6 +154,8 @@ impl CelestineApp {
             overlay_focus_pending: false,
             folder_icons: HashMap::new(),
             recent_notes: Vec::new(),
+            update_checker: UpdateChecker::start(env!("CARGO_PKG_VERSION")),
+            update_banner_hidden: false,
         };
 
         if let Some(path) = std::env::args().nth(1) {
@@ -1002,6 +1009,19 @@ impl eframe::App for CelestineApp {
             self.handle_command(cmd, &ctx);
         }
 
+        if self.update_checker.poll() {
+            ctx.request_repaint();
+        } else if self.update_checker.pending() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(400));
+        }
+        // Respect a previously dismissed feature line.
+        if let Some(info) = self.update_checker.available() {
+            let line = format!("{}.{}", info.version.major, info.version.minor);
+            if self.persist.dismissed_update_line.as_deref() == Some(line.as_str()) {
+                self.update_checker.clear();
+            }
+        }
+
         let palette = theme_apply::ThemePalette::from_tokens(&self.theme);
         let accent = palette.accent;
         let muted = palette.muted;
@@ -1084,6 +1104,73 @@ impl eframe::App for CelestineApp {
                     });
                 });
             });
+
+        // Feature-release notice (GitHub). Patch-only bumps never appear here.
+        if !self.update_banner_hidden {
+            if let Some(info) = self.update_checker.available().cloned() {
+                let mut open_release = false;
+                let mut dismiss = false;
+                egui::Panel::top("update_banner")
+                    .exact_size(28.0)
+                    .frame(theme_apply::panel_frame(&ctx))
+                    .show(ui, |ui| {
+                        ui.horizontal_centered(|ui| {
+                            ui.label(
+                                RichText::new(format!(
+                                    "CelestineMD {} available",
+                                    info.version.display()
+                                ))
+                                .size(12.0)
+                                .color(accent),
+                            );
+                            ui.label(
+                                RichText::new("· GitHub release")
+                                    .size(11.5)
+                                    .color(muted),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if naked_button(
+                                        ui,
+                                        RichText::new("×").size(13.0).color(muted),
+                                    )
+                                    .on_hover_text("Dismiss")
+                                    .clicked()
+                                    {
+                                        dismiss = true;
+                                    }
+                                    if naked_button(
+                                        ui,
+                                        RichText::new("view")
+                                            .size(12.0)
+                                            .color(accent),
+                                    )
+                                    .on_hover_text("Open release page")
+                                    .clicked()
+                                    {
+                                        open_release = true;
+                                    }
+                                },
+                            );
+                        });
+                    });
+                if open_release {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(&info.html_url));
+                    let line = format!("{}.{}", info.version.major, info.version.minor);
+                    self.persist.dismissed_update_line = Some(line);
+                    self.persist.save();
+                    self.update_banner_hidden = true;
+                    self.update_checker.clear();
+                } else if dismiss {
+                    let line = format!("{}.{}", info.version.major, info.version.minor);
+                    self.persist.dismissed_update_line = Some(line);
+                    self.persist.save();
+                    self.update_banner_hidden = true;
+                    self.update_checker.clear();
+                }
+            }
+        }
 
         // Tabs strip
         if !self.tabs.is_empty() {

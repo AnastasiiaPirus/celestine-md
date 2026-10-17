@@ -21,6 +21,10 @@ pub struct AppState {
     pub show_left_sidebar: bool,
     #[serde(default = "default_true")]
     pub show_right_sidebar: bool,
+    /// Last dismissed feature-line update (`"MAJOR.MINOR"`), so patch bumps
+    /// and the same feature release don't re-nag after dismiss.
+    #[serde(default)]
+    pub dismissed_update_line: Option<String>,
 }
 
 fn default_ui_scale() -> f32 {
@@ -50,6 +54,7 @@ impl Default for AppState {
             theme: None,
             show_left_sidebar: true,
             show_right_sidebar: true,
+            dismissed_update_line: None,
         }
     }
 }

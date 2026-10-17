@@ -103,7 +103,7 @@ Tagged releases on GitHub ship archives for **Linux x86_64**, **macOS** (Intel +
 
 ```bash
 # Linux / macOS example
-tar -xzf celestine-linux-x86_64-v0.1.0.tar.gz
+tar -xzf celestine-linux-x86_64-v0.2.0.tar.gz
 ./celestine-linux-x86_64/install.sh          # → ~/.local/bin/celestine
 celestine ~/Notes
 ```
