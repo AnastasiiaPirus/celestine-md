@@ -41,7 +41,7 @@ Opening a folder that also contains `.obsidian/` is fine: Celestine reads the Ma
 ### Themes
 Built-in CSS packs (distinct folder/heading palettes per pack):
 
-`obsidian-dark` · `obsidian-light` · `catppuccin` · `tokyo-night` · `gruvbox-dark` · `gruvbox-light` · `nord` · `solarized-dark` · `solarized-light` · `dracula` · `rose-pine` · `everforest-dark` · **`terminal`** (Omarchy `colors.toml` when present)
+`obsidian-dark` · `obsidian-light` · `catppuccin` · `tokyo-night` · `gruvbox-dark` · `gruvbox-light` · `nord` · `solarized-dark` · `solarized-light` · `dracula` · `rose-pine` · `everforest-dark` · **`neovoid`** · `one-dark` · `monokai` · `kanagawa` · `ayu-dark` · `oxocarbon` · `high-contrast` · **`terminal`** (Omarchy `colors.toml` when present)
 
 Theme picker: **Mod+T**. Flat flea-like chrome (naked buttons, JetBrains Mono when available).
 

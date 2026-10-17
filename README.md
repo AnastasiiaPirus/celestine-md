@@ -36,15 +36,18 @@
 
 ---
 
-<p align="center">
-  <img src="assets/screenshots/readme-editor.png" alt="CelestineMD editor — tokyo-night theme" width="720">
-</p>
-<p align="center"><sub><strong>tokyo-night</strong> — note open with files, outline, backlinks; chords printed in the chrome so you never hunt menus</sub></p>
-
-<p align="center">
-  <img src="assets/screenshots/readme-graph.png" alt="CelestineMD graph view — tokyo-night theme" width="720">
-</p>
-<p align="center"><sub>Graph (<code>Mod+G</code>) — folder-tinted clusters; pan/zoom with the mouse when you want it, shortcut when you don’t</sub></p>
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/readme-editor.png" alt="CelestineMD editor — neovoid theme" width="520"><br/>
+      <sub><strong>Editor</strong> — <code>neovoid</code> · files · outline · backlinks</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/readme-graph.png" alt="CelestineMD graph view — neovoid theme" width="520"><br/>
+      <sub><strong>Graph</strong> (<code>Mod+G</code>) — folder-tinted clusters</sub>
+    </td>
+  </tr>
+</table>
 
 ---
 
@@ -62,7 +65,7 @@ Most note apps either ship Electron bloat or lock you into a proprietary store.
 | **Keyboard-first** | Heavy on shortcuts — file tree, tabs, graph, rename, sidebars — so the GUI can shrink out of your way. |
 | **Made for you** | Remappable TOML keybinds + CSS theme packs (folder rainbows, heading colors). Shape the app around *your* habits. |
 | **Honest UI** | Flat flea chrome. No ribbon farm. No plugin bazaar (by design). |
-| **~5× lighter RAM** | Native egui vs Electron — see [Celestine vs Obsidian](#celestine-vs-obsidian). |
+| **~4× lighter RAM** | ~162&nbsp;MB vs ~644&nbsp;MB Obsidian — see [Celestine vs Obsidian](#celestine-vs-obsidian). |
 
 ---
 
@@ -183,10 +186,10 @@ Full map: [`docs/INSPIRATION.md`](docs/INSPIRATION.md).
 
 Ship-ready packs in [`themes/`](themes/):
 
-`obsidian-dark` · `obsidian-light` · `catppuccin` · `tokyo-night` · `gruvbox-dark` · `gruvbox-light` · `nord` · `solarized-dark` · `solarized-light` · `dracula` · `rose-pine` · `everforest-dark` · **`terminal`**
+`obsidian-dark` · `obsidian-light` · `catppuccin` · `tokyo-night` · `gruvbox-dark` · `gruvbox-light` · `nord` · `solarized-dark` · `solarized-light` · `dracula` · `rose-pine` · `everforest-dark` · **`neovoid`** · `one-dark` · `monokai` · `kanagawa` · `ayu-dark` · `oxocarbon` · `high-contrast` · **`terminal`**
 
 ```bash
-CELESTINE_THEME=tokyo-night celestine ~/Notes
+CELESTINE_THEME=neovoid celestine ~/Notes
 ```
 
 Themes are **CSS custom properties** (`--background-primary`, …) parsed into UI tokens — editable, portable, no Electron required. Each pack gets its own folder rainbow and heading colors so themes actually feel different.
@@ -196,7 +199,7 @@ Themes are **CSS custom properties** (`--background-primary`, …) parsed into U
 A sample vault (wikilinks, folders, graph-ready) lives **outside** this git repo:
 
 ```bash
-CELESTINE_THEME=tokyo-night celestine ~/Projects/celestine-demo-vault
+CELESTINE_THEME=neovoid celestine ~/Projects/celestine-demo-vault
 ```
 
 Open `Home.md`, press `Mod+G` for the graph, `?` for the cheat sheet.
@@ -234,15 +237,22 @@ flowchart LR
 
 Same idea (local Markdown vaults) — different engine. Obsidian runs on **Electron** (Chromium). Celestine is a **native Rust** GUI (`egui` / `eframe`) with no browser runtime.
 
-Typical idle / light-editing footprint (same machine, similar vault size; order-of-magnitude):
+Measured on the same machine (light editing / idle with a small vault):
 
-| | **CelestineMD** | **Obsidian** | Notes |
+| | **CelestineMD** | **Obsidian** | Why it matters |
 |---|---|---|---|
-| **Memory (RAM)** | ~**1×** | ~**5×** | Celestine is about **five times lighter** in RAM |
-| **CPU (idle)** | Near-idle; short spikes on keystrokes / redraw | Background Chromium + renderer work even when idle |
-| **GPU** | Light OpenGL/wgpu for UI; no full browser compositor | Chromium GPU process + compositing |
+| **RAM (RSS)** | ~**162 MB** | ~**644 MB** | ~**4×** less memory in `btop` |
+| **On disk** | ~**31 MB** single binary | ~**25 MB** app + ~**336 MB** Electron ≈ **360 MB** | One native binary vs a Chromium runtime |
+| **Startup** | Near-instant | A couple of seconds of Electron boot | Open a vault like opening a terminal |
+| **CPU (idle)** | Near-idle | Chromium + renderer keep humming | Less heat, less fan |
+| **Surface area** | Core loop only (by design) | Plugins, sync marketplace, ribbon farm | Less to learn, less to break |
 
-Numbers vary with vault size, plugins (Obsidian), and theme, but the shape is consistent: dropping Electron is most of the win. Celestine stays intentionally small so that light footprint remains a feature, not a temporary phase.
+<p align="center">
+  <img src="assets/screenshots/readme-ram-btop.png" alt="btop showing celestine at ~162 MB RSS" width="520"><br/>
+  <sub><strong>btop</strong> — Celestine ~162&nbsp;MB RSS while editing the demo vault (Obsidian idle ~644&nbsp;MB on the same box)</sub>
+</p>
+
+Numbers move with vault size and Obsidian plugins, but the shape stays: **drop Electron, keep the Markdown.** Celestine stays intentionally small so that light footprint remains a feature, not a temporary phase.
 
 ---
 

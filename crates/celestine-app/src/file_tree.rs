@@ -465,7 +465,12 @@ fn show_dir(
                 ui.set_min_height(row_h);
                 ui.spacing_mut().item_spacing.x = 4.0;
                 ui.add_space(TREE_ICON * 0.85 + 4.0);
-                crate::icons::show(ui, "file-text", TREE_ICON, color);
+                let file_icon = if crate::media::is_image_rel(rel) {
+                    "image"
+                } else {
+                    "file-text"
+                };
+                crate::icons::show(ui, file_icon, TREE_ICON, color);
                 if is_renaming {
                     if let Some(edit) = rename.as_mut() {
                         let te = egui::TextEdit::singleline(&mut edit.draft)

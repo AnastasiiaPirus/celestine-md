@@ -6,6 +6,7 @@ mod graph_view;
 mod icons;
 mod keybinds;
 mod md_edit;
+mod media;
 mod outline_tree;
 mod preview;
 mod state;

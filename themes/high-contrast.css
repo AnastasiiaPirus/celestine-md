@@ -1,0 +1,11 @@
+/* CelestineMD theme: high-contrast — near-black / near-white + amber */
+:root {
+  --background-primary: #000000;
+  --background-secondary: #0d0d0d;
+  --background-modifier-border: #3a3a3a;
+  --text-normal: #ffffff;
+  --text-muted: #b0b0b0;
+  --text-accent: #ffd60a;
+  --interactive-accent: #ffd60a;
+  --selection: #333300;
+}

@@ -1,0 +1,11 @@
+/* CelestineMD theme: oxocarbon — IBM Carbon dark (sharp contrast) */
+:root {
+  --background-primary: #161616;
+  --background-secondary: #262626;
+  --background-modifier-border: #393939;
+  --text-normal: #f4f4f4;
+  --text-muted: #6f6f6f;
+  --text-accent: #78a9ff;
+  --interactive-accent: #ff7eb6;
+  --selection: #393939;
+}

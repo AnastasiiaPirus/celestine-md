@@ -1,0 +1,11 @@
+/* CelestineMD theme: ayu-dark — warm dark with bright accents */
+:root {
+  --background-primary: #0b0e14;
+  --background-secondary: #0f131a;
+  --background-modifier-border: #1b2733;
+  --text-normal: #bfbdb6;
+  --text-muted: #565b66;
+  --text-accent: #ffb454;
+  --interactive-accent: #39bae6;
+  --selection: #1b2733;
+}

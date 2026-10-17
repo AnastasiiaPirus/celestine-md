@@ -1,0 +1,11 @@
+/* CelestineMD theme: monokai — classic high-contrast neon */
+:root {
+  --background-primary: #1e1f1c;
+  --background-secondary: #272822;
+  --background-modifier-border: #49483e;
+  --text-normal: #f8f8f2;
+  --text-muted: #75715e;
+  --text-accent: #a6e22e;
+  --interactive-accent: #f92672;
+  --selection: #49483e;
+}

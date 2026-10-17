@@ -1,0 +1,11 @@
+/* CelestineMD theme: one-dark — Atom One Dark */
+:root {
+  --background-primary: #21252b;
+  --background-secondary: #282c34;
+  --background-modifier-border: #3e4452;
+  --text-normal: #abb2bf;
+  --text-muted: #5c6370;
+  --text-accent: #61afef;
+  --interactive-accent: #c678dd;
+  --selection: #3e4451;
+}

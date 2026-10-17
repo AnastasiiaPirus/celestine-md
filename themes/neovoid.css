@@ -1,0 +1,11 @@
+/* CelestineMD theme: neovoid — Omarchy NeoVoid (void black + neon cyan) */
+:root {
+  --background-primary: #000000;
+  --background-secondary: #0a0a0a;
+  --background-modifier-border: #1a1a1a;
+  --text-normal: #e0e0e0;
+  --text-muted: #8a8a8d;
+  --text-accent: #00bfff;
+  --interactive-accent: #00bfff;
+  --selection: #123c56;
+}

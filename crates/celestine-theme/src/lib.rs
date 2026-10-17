@@ -21,6 +21,13 @@ pub const BUILTIN_THEME_NAMES: &[&str] = &[
     "dracula",
     "rose-pine",
     "everforest-dark",
+    "neovoid",
+    "one-dark",
+    "monokai",
+    "kanagawa",
+    "ayu-dark",
+    "oxocarbon",
+    "high-contrast",
     "terminal",
 ];
 

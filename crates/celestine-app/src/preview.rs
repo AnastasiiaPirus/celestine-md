@@ -1,7 +1,9 @@
+use crate::media::{self, is_image_target};
 use celestine_core::{resolve_link, ResolvedLink, VaultIndex};
 use egui::{Color32, FontId, RichText, Sense, Stroke, TextStyle, Ui, Vec2};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use regex::Regex;
+use std::path::Path;
 use std::sync::OnceLock;
 
 pub struct PreviewOutcome {
@@ -64,7 +66,12 @@ fn preprocess(body: &str) -> String {
         };
         let target = target.split('#').next().unwrap_or(target);
         if embed {
-            out.push_str(&format!("*[embed: {display}]* (`wikilink:{target}`)"));
+            if is_image_target(target) {
+                // Render as a real markdown image so the preview can show pixels.
+                out.push_str(&format!("![{display}]({target})"));
+            } else {
+                out.push_str(&format!("*[embed: {display}]* (`wikilink:{target}`)"));
+            }
         } else {
             out.push_str(&format!("[{display}](wikilink:{target})"));
         }
@@ -79,7 +86,9 @@ pub fn show_preview(
     ui: &mut Ui,
     body: &str,
     note_rel: &str,
+    vault_root: &Path,
     index: &VaultIndex,
+    image_rels: &[String],
     accent: Color32,
     muted: Color32,
     text: Color32,
@@ -119,6 +128,8 @@ pub fn show_preview(
     let mut in_table_cell = false;
     let mut cell_buf = String::new();
     let mut paragraph_buf: Vec<(RichText, Option<String>)> = Vec::new();
+    let mut image_dest: Option<String> = None;
+    let mut image_alt = String::new();
 
     let flush_paragraph = |ui: &mut Ui,
                            buf: &mut Vec<(RichText, Option<String>)>,
@@ -271,8 +282,51 @@ pub fn show_preview(
                 Event::End(TagEnd::Link) => {
                     link_dest = None;
                 }
+                Event::Start(Tag::Image { dest_url, .. }) => {
+                    flush_paragraph(ui, &mut paragraph_buf, &mut open_rel, index, note_rel);
+                    image_dest = Some(dest_url.to_string());
+                    image_alt.clear();
+                }
+                Event::End(TagEnd::Image) => {
+                    let dest = image_dest.take().unwrap_or_default();
+                    let alt = std::mem::take(&mut image_alt);
+                    let max_w = ui.available_width().max(32.0);
+                    if dest.starts_with("http://") || dest.starts_with("https://") {
+                        ui.label(
+                            RichText::new(format!("[image: {alt}] ({dest})"))
+                                .size(font_size * 0.9)
+                                .color(muted),
+                        );
+                    } else if let Some(abs) =
+                        media::resolve_image_abs(vault_root, note_rel, &dest, image_rels)
+                    {
+                        let resp = media::show_fitted_image(ui, &abs, max_w);
+                        let tip = if alt.is_empty() {
+                            abs.display().to_string()
+                        } else {
+                            format!("{alt}\n{}", abs.display())
+                        };
+                        let resp = resp.on_hover_text(tip);
+                        if resp.clicked() {
+                            if let Some(rel) = media::abs_to_rel(vault_root, &abs) {
+                                open_rel = Some(rel);
+                            }
+                        }
+                    } else {
+                        ui.label(
+                            RichText::new(format!("[missing image: {dest}]"))
+                                .size(font_size * 0.9)
+                                .color(muted),
+                        );
+                    }
+                    ui.add_space(8.0);
+                }
                 Event::Text(raw) => {
                     let s = raw.as_ref();
+                    if image_dest.is_some() {
+                        image_alt.push_str(s);
+                        continue;
+                    }
                     if in_code_block {
                         code_buf.push_str(s);
                         continue;
@@ -481,6 +535,9 @@ fn resolve_dest(index: &VaultIndex, note_rel: &str, dest: &str) -> Option<String
     let target = dest.strip_prefix("wikilink:").unwrap_or(dest);
     if target.starts_with("http://") || target.starts_with("https://") {
         return None;
+    }
+    if is_image_target(target) {
+        return Some(target.replace('\\', "/"));
     }
     match resolve_link(index, note_rel, target) {
         ResolvedLink::Note(id) => index.get(id).map(|n| n.rel.clone()),

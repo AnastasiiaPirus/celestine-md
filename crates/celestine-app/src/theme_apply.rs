@@ -139,6 +139,13 @@ fn theme_hue_seed(name: &str) -> f32 {
         "dracula" => 310.0,
         "rose-pine" => 290.0,
         "everforest-dark" => 145.0,
+        "neovoid" => 195.0,
+        "one-dark" => 250.0,
+        "monokai" => 80.0,
+        "kanagawa" => 220.0,
+        "ayu-dark" => 35.0,
+        "oxocarbon" => 330.0,
+        "high-contrast" => 50.0,
         "terminal" => 215.0,
         other => {
             let mut h = 0u32;

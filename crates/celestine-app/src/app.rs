@@ -37,8 +37,15 @@ enum FocusPane {
     Graph,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TabKind {
+    Note,
+    Image,
+}
+
 struct OpenTab {
     rel: String,
+    kind: TabKind,
     buffer: String,
     dirty: bool,
     preview_mode: bool,
@@ -81,6 +88,8 @@ pub struct CelestineApp {
     overlay_focus_pending: bool,
     /// Per-vault custom folder icons (rel path → emoji).
     folder_icons: HashMap<String, String>,
+    /// Most-recently-opened notes/images in the current vault (newest first).
+    recent_notes: Vec<String>,
 }
 
 impl CelestineApp {
@@ -136,6 +145,7 @@ impl CelestineApp {
             outline_collapsed: HashSet::new(),
             overlay_focus_pending: false,
             folder_icons: HashMap::new(),
+            recent_notes: Vec::new(),
         };
 
         if let Some(path) = std::env::args().nth(1) {
@@ -159,6 +169,7 @@ impl CelestineApp {
                     .find(|r| r.eq_ignore_ascii_case("Home.md"))
                     .or_else(|| v.list_md_rel_paths().into_iter().next());
                 self.folder_icons = file_tree::load_folder_icons(&path);
+                self.recent_notes = load_recent_notes(&path);
                 self.vault = Some(v);
                 self.persist.push_recent(&path);
                 if let Some(rel) = first {
@@ -175,6 +186,7 @@ impl CelestineApp {
         self.tabs.clear();
         self.active_tab = 0;
         self.former_tab = 0;
+        self.recent_notes.clear();
         self.show_graph = false;
         self.nav_back.clear();
         self.nav_forward.clear();
@@ -234,12 +246,73 @@ impl CelestineApp {
         self.status = format!("note padding {:.0}px", self.persist.note_h_pad);
     }
 
+    /// Open a note or image from the sidebar / links / quick-open.
+    fn open_path(&mut self, rel: &str, push_nav: bool) {
+        if crate::media::is_image_rel(rel) {
+            self.open_image(rel, push_nav);
+        } else {
+            self.open_note(rel, push_nav);
+        }
+    }
+
+    fn open_image(&mut self, rel: &str, push_nav: bool) {
+        self.outline_collapsed.clear();
+        let Some(vault) = self.vault.as_ref() else {
+            return;
+        };
+        let note_rel = self
+            .tabs
+            .get(self.active_tab)
+            .map(|t| t.rel.as_str())
+            .unwrap_or("");
+        let images = vault.list_image_rel_paths();
+        let resolved_rel = crate::media::resolve_image_abs(&vault.root, note_rel, rel, &images)
+            .and_then(|abs| crate::media::abs_to_rel(&vault.root, &abs))
+            .unwrap_or_else(|| rel.replace('\\', "/"));
+        let abs = vault.root.join(&resolved_rel);
+        if !abs.is_file() {
+            self.status = format!("missing image {rel}");
+            return;
+        }
+        let rel = resolved_rel.as_str();
+
+        if push_nav {
+            if let Some(cur) = self.tabs.get(self.active_tab) {
+                self.nav_back.push(cur.rel.clone());
+                self.nav_forward.clear();
+            }
+        }
+
+        if let Some(i) = self.tabs.iter().position(|t| t.rel == rel) {
+            self.former_tab = self.active_tab;
+            self.active_tab = i;
+            self.touch_recent_note(rel);
+            return;
+        }
+        self.former_tab = self.active_tab;
+        self.tabs.push(OpenTab {
+            rel: rel.to_string(),
+            kind: TabKind::Image,
+            buffer: String::new(),
+            dirty: false,
+            preview_mode: true,
+            scroll_to_line: None,
+            scroll_to_heading: None,
+            editor_text_id: egui::Id::new(("celestine-image", rel.to_string())),
+        });
+        self.active_tab = self.tabs.len() - 1;
+        self.show_graph = false;
+        self.focus = FocusPane::Editor;
+        self.status = format!("image {rel}");
+        self.touch_recent_note(rel);
+    }
+
     fn open_note(&mut self, rel: &str, push_nav: bool) {
         self.outline_collapsed.clear();
         let Some(vault) = self.vault.as_mut() else {
             return;
         };
-        // Create if missing
+        // Create if missing (notes only — never invent image files).
         if vault.index.get_by_rel(rel).is_none() {
             if let Err(e) = vault.create_note(rel) {
                 self.status = format!("create failed: {e}");
@@ -265,11 +338,13 @@ impl CelestineApp {
         if let Some(i) = self.tabs.iter().position(|t| t.rel == rel) {
             self.former_tab = self.active_tab;
             self.active_tab = i;
+            self.touch_recent_note(rel);
             return;
         }
         self.former_tab = self.active_tab;
         self.tabs.push(OpenTab {
             rel: rel.to_string(),
+            kind: TabKind::Note,
             buffer: content,
             dirty: false,
             preview_mode: false,
@@ -280,6 +355,20 @@ impl CelestineApp {
         self.active_tab = self.tabs.len() - 1;
         self.show_graph = false;
         self.focus = FocusPane::Editor;
+        self.touch_recent_note(rel);
+    }
+
+    fn touch_recent_note(&mut self, rel: &str) {
+        let rel = rel.replace('\\', "/");
+        if rel.is_empty() {
+            return;
+        }
+        self.recent_notes.retain(|r| r != &rel);
+        self.recent_notes.insert(0, rel);
+        self.recent_notes.truncate(48);
+        if let Some(vault) = &self.vault {
+            save_recent_notes(&vault.root, &self.recent_notes);
+        }
     }
 
     fn save_active(&mut self) {
@@ -289,6 +378,10 @@ impl CelestineApp {
         let Some(tab) = self.tabs.get_mut(self.active_tab) else {
             return;
         };
+        if tab.kind == TabKind::Image {
+            self.status = "images are read-only".into();
+            return;
+        }
         match vault.write_note(&tab.rel, &tab.buffer) {
             Ok(()) => {
                 tab.dirty = false;
@@ -373,7 +466,11 @@ impl CelestineApp {
             Command::Save => self.save_active(),
             Command::TogglePreview => {
                 if let Some(t) = self.tabs.get_mut(self.active_tab) {
-                    t.preview_mode = !t.preview_mode;
+                    if t.kind == TabKind::Image {
+                        self.status = "image viewer (read-only)".into();
+                    } else {
+                        t.preview_mode = !t.preview_mode;
+                    }
                 }
             }
             Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
@@ -726,6 +823,13 @@ impl CelestineApp {
         }
         self.persist_folder_icons();
 
+        for r in &mut self.recent_notes {
+            *r = remap(r);
+        }
+        if let Some(vault) = &self.vault {
+            save_recent_notes(&vault.root, &self.recent_notes);
+        }
+
         self.tree_cursor = Some(if is_dir {
             file_tree::TreeNavItem::Dir(new_rel.to_string())
         } else {
@@ -812,7 +916,7 @@ impl CelestineApp {
         if let Some(cur) = self.tabs.get(self.active_tab).map(|t| t.rel.clone()) {
             self.nav_forward.push(cur);
         }
-        self.open_note(&prev, false);
+        self.open_path(&prev, false);
     }
 
     fn nav_go_forward(&mut self) {
@@ -823,7 +927,7 @@ impl CelestineApp {
         if let Some(cur) = self.tabs.get(self.active_tab).map(|t| t.rel.clone()) {
             self.nav_back.push(cur);
         }
-        self.open_note(&next, false);
+        self.open_path(&next, false);
     }
 
     fn reveal_active_in_tree(&mut self) {
@@ -1065,7 +1169,7 @@ impl eframe::App for CelestineApp {
                         let mut paths = self
                             .vault
                             .as_ref()
-                            .map(|v| v.list_md_rel_paths())
+                            .map(|v| v.list_sidebar_rel_paths())
                             .unwrap_or_default();
                         paths.sort();
                         let tree = file_tree::build_tree(&paths);
@@ -1075,7 +1179,7 @@ impl eframe::App for CelestineApp {
                         if tree_focused && self.overlay == Overlay::None {
                             if let Some(rel) = self.handle_tree_keys(&ctx, &tree) {
                                 self.expand_ancestors(&rel);
-                                self.open_note(&rel, true);
+                                self.open_path(&rel, true);
                                 self.focus = FocusPane::Editor;
                             }
                         }
@@ -1117,7 +1221,7 @@ impl eframe::App for CelestineApp {
                         }
                         if let Some(rel) = outcome.open_rel {
                             self.expand_ancestors(&rel);
-                            self.open_note(&rel, true);
+                            self.open_path(&rel, true);
                             self.focus = FocusPane::Editor;
                         }
                     } else {
@@ -1161,6 +1265,12 @@ impl eframe::App for CelestineApp {
                     if let (Some(vault), Some(tab)) =
                         (self.vault.as_ref(), self.tabs.get(self.active_tab))
                     {
+                        if tab.kind == TabKind::Image {
+                            ui.label(
+                                RichText::new("(image — no outline)")
+                                    .color(muted),
+                            );
+                        } else {
                         let parsed = extract_note_data(&tab.buffer);
                         let tree = outline_tree::build(&parsed.headings);
                         ScrollArea::vertical()
@@ -1206,6 +1316,7 @@ impl eframe::App for CelestineApp {
                                 }
                             }
                         }
+                        } // TabKind::Note outline/backlinks
                     }
                     if let Some((line, heading)) = jump {
                         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
@@ -1295,9 +1406,39 @@ impl eframe::App for CelestineApp {
                 if self.overlay != Overlay::None {
                     ui.disable();
                 }
+                let tab_kind = self.tabs[tab_idx].kind;
                 let preview_mode = self.tabs[tab_idx].preview_mode;
                 let rel = self.tabs[tab_idx].rel.clone();
                 let md_font = self.persist.editor_font_size;
+
+                if tab_kind == TabKind::Image {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!("── {rel} ──"))
+                                .monospace()
+                                .color(accent),
+                        );
+                        ui.label(
+                            RichText::new("IMAGE")
+                                .monospace()
+                                .color(muted),
+                        );
+                    });
+                    let fill_h = ui.available_height().max(80.0);
+                    let fill_w = ui.available_width().max(1.0);
+                    if let Some(vault) = &self.vault {
+                        let abs = vault.root.join(&rel);
+                        ScrollArea::both()
+                            .id_salt("image-scroll")
+                            .auto_shrink([false, false])
+                            .max_width(fill_w)
+                            .min_scrolled_height(fill_h)
+                            .show(ui, |ui| {
+                                ui.set_min_size(egui::vec2(fill_w, fill_h));
+                                crate::media::show_standalone(ui, &abs, muted);
+                            });
+                    }
+                } else {
                 let stats = text_stats(&self.tabs[tab_idx].buffer);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("── {rel} ──")).monospace().color(accent));
@@ -1348,6 +1489,7 @@ impl eframe::App for CelestineApp {
                     };
                     let scroll_heading = self.tabs[tab_idx].scroll_to_heading.clone();
                     let outcome = if let Some(vault) = &self.vault {
+                        let image_rels = vault.list_image_rel_paths();
                         ScrollArea::vertical()
                             .id_salt("preview-scroll")
                             .auto_shrink([false, false])
@@ -1371,7 +1513,9 @@ impl eframe::App for CelestineApp {
                                                 ui,
                                                 &body,
                                                 &rel,
+                                                &vault.root,
                                                 &vault.index,
+                                                &image_rels,
                                                 accent,
                                                 muted,
                                                 text_c,
@@ -1399,15 +1543,19 @@ impl eframe::App for CelestineApp {
                         }
                     }
                     if let Some(r) = outcome.open_rel {
-                        if self
-                            .vault
-                            .as_ref()
-                            .and_then(|v| v.index.get_by_rel(&r))
-                            .is_none()
-                        {
-                            self.status = format!("creating {r}");
+                        if crate::media::is_image_rel(&r) {
+                            self.open_path(&r, true);
+                        } else {
+                            if self
+                                .vault
+                                .as_ref()
+                                .and_then(|v| v.index.get_by_rel(&r))
+                                .is_none()
+                            {
+                                self.status = format!("creating {r}");
+                            }
+                            self.open_note(&r, true);
                         }
-                        self.open_note(&r, true);
                     }
                 } else {
                     let font = FontId::monospace(md_font);
@@ -1540,6 +1688,7 @@ impl eframe::App for CelestineApp {
                         self.tabs[tab_idx].dirty = true;
                     }
                 }
+                } // TabKind::Note
             } else {
                 ui.centered_and_justified(|ui| {
                     ui.label(
@@ -1607,14 +1756,23 @@ impl CelestineApp {
                 }
             });
 
+        // Tall, stable list viewport (~2/3 of the window). Do NOT let ScrollArea
+        // shrink to the filtered hit count — that was the “tiny quick open” bug.
+        let screen = ctx.content_rect();
+        let overlay_top = 48.0 + 16.0 * alpha;
+        let chrome_h = 88.0; // title + filter + margins
+        let list_h = ((screen.height() - overlay_top - chrome_h) * 0.92)
+            .clamp(420.0, screen.height() * 0.72);
+        let panel_w = 640.0_f32;
+
         egui::Area::new(egui::Id::new("overlay"))
-            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 64.0 * alpha))
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, overlay_top))
             .order(egui::Order::Foreground)
             .interactable(true)
             .show(&ctx, |ui| {
                 theme_apply::overlay_frame(&self.theme).show(ui, |ui| {
-                    ui.set_min_width(500.0);
-                    ui.set_max_width(640.0);
+                    ui.set_width(panel_w);
+                    ui.set_max_width(panel_w);
                     ui.label(
                         RichText::new(title)
                             .strong()
@@ -1623,13 +1781,15 @@ impl CelestineApp {
                     );
                     ui.add_space(6.0);
                     match self.overlay {
-                        Overlay::Shortcuts => self.ui_shortcuts(ui, muted),
+                        Overlay::Shortcuts => self.ui_shortcuts(ui, muted, list_h),
                         Overlay::Settings => self.ui_settings(ui, ctx, accent, muted),
-                        Overlay::ThemePicker => self.ui_theme_picker(ui, ctx, accent, muted),
-                        Overlay::RecentVaults => self.ui_recent_vaults(ui, ctx, accent, muted),
+                        Overlay::ThemePicker => self.ui_theme_picker(ui, ctx, accent, muted, list_h),
+                        Overlay::RecentVaults => {
+                            self.ui_recent_vaults(ui, ctx, accent, muted, list_h)
+                        }
                         Overlay::Find => self.ui_find(ui),
                         Overlay::QuickOpen | Overlay::CommandPalette | Overlay::VaultSearch => {
-                            self.ui_fuzzy(ui, accent, muted);
+                            self.ui_fuzzy(ui, accent, muted, list_h);
                         }
                         Overlay::None => {}
                     }
@@ -1637,8 +1797,8 @@ impl CelestineApp {
             });
     }
 
-    fn ui_shortcuts(&self, ui: &mut Ui, muted: egui::Color32) {
-        ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+    fn ui_shortcuts(&self, ui: &mut Ui, muted: egui::Color32, list_h: f32) {
+        overlay_scroll_list(ui, list_h, |ui| {
             for (cmd, chord) in self.keymap.all_listed() {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("{chord:16}")).monospace().color(muted));
@@ -1790,6 +1950,7 @@ impl CelestineApp {
         ctx: &egui::Context,
         accent: egui::Color32,
         muted: egui::Color32,
+        list_h: f32,
     ) {
         let filter_id = egui::Id::new("celestine-theme-filter");
         let resp = ui.add(
@@ -1828,7 +1989,7 @@ impl CelestineApp {
 
         let text_c = color(self.theme.text_normal);
         let mut pick = None;
-        ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+        overlay_scroll_list(ui, list_h, |ui| {
             for (i, name) in themes.iter().enumerate() {
                 let selected = i == self.overlay_selected;
                 let is_current = name == &self.theme_name;
@@ -1883,6 +2044,7 @@ impl CelestineApp {
         ctx: &egui::Context,
         accent: egui::Color32,
         muted: egui::Color32,
+        list_h: f32,
     ) {
         self.persist.clear_recent_missing();
         if naked_button(
@@ -1904,25 +2066,69 @@ impl CelestineApp {
             ui.label(RichText::new("(no recent vaults)").color(muted));
             return;
         }
+
+        let vaults = self.persist.recent_vaults.clone();
+        if self.overlay_selected >= vaults.len() {
+            self.overlay_selected = vaults.len().saturating_sub(1);
+        }
+        // Prefer last vault on first open of this overlay.
+        if self.overlay_focus_pending {
+            if let Some(last) = &self.persist.last_vault {
+                if let Some(i) = vaults.iter().position(|p| p == last) {
+                    self.overlay_selected = i;
+                }
+            }
+            self.overlay_focus_pending = false;
+        }
+
+        if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+            self.overlay_selected = (self.overlay_selected + 1).min(vaults.len().saturating_sub(1));
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+            self.overlay_selected = self.overlay_selected.saturating_sub(1);
+        }
+
         let mut open = None;
-        ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-            for path in &self.persist.recent_vaults {
+        overlay_scroll_list(ui, list_h, |ui| {
+            for (i, path) in vaults.iter().enumerate() {
+                let selected = i == self.overlay_selected;
                 let is_last = self.persist.last_vault.as_deref() == Some(path.as_str());
-                let label = if is_last {
-                    format!("★  {path}")
+                let mark = if is_last { "★" } else { " " };
+                let label = format!("{mark}  {path}");
+                let color = if selected {
+                    accent
+                } else if is_last {
+                    accent.gamma_multiply(0.85)
                 } else {
-                    format!("   {path}")
+                    muted
                 };
-                if naked_button(
-                    ui,
-                    RichText::new(label).color(if is_last { accent } else { muted }),
-                )
-                .clicked()
-                {
+                let row = ui.add(
+                    egui::Button::new(RichText::new(label).monospace().color(color))
+                        .frame(false)
+                        .selected(selected),
+                );
+                if selected {
+                    row.scroll_to_me(Some(egui::Align::Center));
+                }
+                if row.clicked() {
                     open = Some(path.clone());
                 }
             }
         });
+
+        if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            if let Some(path) = vaults.get(self.overlay_selected) {
+                open = Some(path.clone());
+            }
+        }
+
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new("↑↓ move · enter open · esc dismiss")
+                .size(11.0)
+                .color(muted),
+        );
+
         if let Some(path) = open {
             self.overlay = Overlay::None;
             self.open_vault(PathBuf::from(path), ctx);
@@ -1948,11 +2154,21 @@ impl CelestineApp {
         }
     }
 
-    fn ui_fuzzy(&mut self, ui: &mut Ui, accent: egui::Color32, muted: egui::Color32) {
+    fn ui_fuzzy(
+        &mut self,
+        ui: &mut Ui,
+        accent: egui::Color32,
+        muted: egui::Color32,
+        list_h: f32,
+    ) {
         let resp = ui.add(
             TextEdit::singleline(&mut self.overlay_query)
                 .id(egui::Id::new("celestine-fuzzy-filter"))
-                .hint_text("type to filter")
+                .hint_text(if self.overlay == Overlay::QuickOpen {
+                    "filter notes — recent first"
+                } else {
+                    "type to filter"
+                })
                 .desired_width(f32::INFINITY),
         );
         if self.overlay_focus_pending {
@@ -1962,24 +2178,66 @@ impl CelestineApp {
 
         let matcher = SkimMatcherV2::default();
         let mut items: Vec<(i64, String, String)> = Vec::new();
+        let recent = self.recent_notes.clone();
+        let recency_rank = |rel: &str| -> Option<usize> {
+            recent.iter().position(|r| r == rel)
+        };
+        let empty_q = self.overlay_query.is_empty();
 
         match self.overlay {
             Overlay::QuickOpen | Overlay::VaultSearch => {
                 if let Some(vault) = &self.vault {
                     for n in vault.index.notes() {
                         let hay = format!("{} {}", n.rel, n.aliases.join(" "));
-                        let score = if self.overlay_query.is_empty() {
-                            Some(0)
+                        let score = if empty_q {
+                            // Prefer recently opened notes for this vault.
+                            Some(match recency_rank(&n.rel) {
+                                Some(i) => 1_000_000 - i as i64,
+                                None => 0,
+                            })
                         } else {
-                            matcher.fuzzy_match(&hay, &self.overlay_query)
+                            matcher.fuzzy_match(&hay, &self.overlay_query).map(|s| {
+                                let boost = recency_rank(&n.rel)
+                                    .map(|i| ((48 - i.min(48)) as i64) * 8)
+                                    .unwrap_or(0);
+                                s + boost
+                            })
                         };
                         if let Some(s) = score {
                             let preview = if self.overlay == Overlay::VaultSearch {
                                 n.body.lines().next().unwrap_or("").to_string()
+                            } else if recency_rank(&n.rel).is_some() && empty_q {
+                                "recent".into()
                             } else {
                                 n.aliases.first().cloned().unwrap_or_default()
                             };
                             items.push((s, n.rel.clone(), preview));
+                        }
+                    }
+                    // Quick open also surfaces vault images.
+                    if self.overlay == Overlay::QuickOpen {
+                        for rel in vault.list_image_rel_paths() {
+                            let score = if empty_q {
+                                Some(match recency_rank(&rel) {
+                                    Some(i) => 1_000_000 - i as i64,
+                                    None => 0,
+                                })
+                            } else {
+                                matcher.fuzzy_match(&rel, &self.overlay_query).map(|s| {
+                                    let boost = recency_rank(&rel)
+                                        .map(|i| ((48 - i.min(48)) as i64) * 8)
+                                        .unwrap_or(0);
+                                    s + boost
+                                })
+                            };
+                            if let Some(s) = score {
+                                let tag = if recency_rank(&rel).is_some() && empty_q {
+                                    "recent · image"
+                                } else {
+                                    "image"
+                                };
+                                items.push((s, rel, tag.into()));
+                            }
                         }
                     }
                 }
@@ -2017,7 +2275,7 @@ impl CelestineApp {
                 ];
                 for c in cmds {
                     let label = format!("{}  {}", c.label(), self.keymap.display_chord(c));
-                    let score = if self.overlay_query.is_empty() {
+                    let score = if empty_q {
                         Some(0)
                     } else {
                         matcher.fuzzy_match(&label, &self.overlay_query)
@@ -2030,6 +2288,7 @@ impl CelestineApp {
             _ => {}
         }
 
+        // Higher score first; for equal scores keep alphabetical (stable browse).
         items.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         if self.overlay_selected >= items.len() && !items.is_empty() {
             self.overlay_selected = items.len() - 1;
@@ -2043,13 +2302,18 @@ impl CelestineApp {
         }
 
         let mut chosen = None;
-        ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
+        overlay_scroll_list(ui, list_h, |ui| {
             for (i, (_s, id, label)) in items.iter().enumerate() {
                 let selected = i == self.overlay_selected;
+                let row = if label.is_empty() {
+                    id.clone()
+                } else {
+                    format!("{id}  {label}")
+                };
                 if ui
                     .selectable_label(
                         selected,
-                        RichText::new(format!("{id}  {label}"))
+                        RichText::new(row)
                             .monospace()
                             .color(if selected { accent } else { muted }),
                     )
@@ -2064,7 +2328,12 @@ impl CelestineApp {
             if let Some((_s, id, _)) = items.get(self.overlay_selected) {
                 chosen = Some(id.clone());
             } else if self.overlay == Overlay::QuickOpen && !self.overlay_query.is_empty() {
-                chosen = Some(ensure_md_path(&self.overlay_query));
+                let q = self.overlay_query.trim();
+                chosen = Some(if crate::media::is_image_rel(q) {
+                    q.replace('\\', "/")
+                } else {
+                    ensure_md_path(q)
+                });
             }
         }
 
@@ -2076,7 +2345,7 @@ impl CelestineApp {
                 }
             } else {
                 self.overlay = Overlay::None;
-                self.open_note(&id, true);
+                self.open_path(&id, true);
             }
         }
     }
@@ -2087,6 +2356,63 @@ fn ensure_md_path(q: &str) -> String {
         q.to_string()
     } else {
         format!("{q}.md")
+    }
+}
+
+/// Fixed-height scroll viewport for overlays.
+///
+/// `ScrollArea` alone can shrink to the filtered hit count (egui only keeps
+/// `min_scrolled_height` when scrollbars are needed). Allocating an exact rect
+/// first keeps quick-open / commands tall even with 1–2 matches.
+fn overlay_scroll_list(ui: &mut Ui, list_h: f32, add_contents: impl FnOnce(&mut Ui)) {
+    let w = ui.available_width().max(1.0);
+    let h = list_h.max(200.0);
+    ui.allocate_ui_with_layout(
+        egui::vec2(w, h),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.set_min_size(egui::vec2(w, h));
+            ui.set_max_size(egui::vec2(w, h));
+            ScrollArea::vertical()
+                .id_salt("overlay-scroll-list")
+                .max_height(h)
+                .min_scrolled_height(h)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.set_min_width(w - 8.0);
+                    add_contents(ui);
+                });
+        },
+    );
+}
+
+fn recent_notes_path(vault_root: &Path) -> PathBuf {
+    vault_root.join(".celestine").join("recent-notes.toml")
+}
+
+fn load_recent_notes(vault_root: &Path) -> Vec<String> {
+    #[derive(serde::Deserialize, Default)]
+    struct File {
+        #[serde(default)]
+        notes: Vec<String>,
+    }
+    let Ok(text) = std::fs::read_to_string(recent_notes_path(vault_root)) else {
+        return Vec::new();
+    };
+    toml::from_str::<File>(&text)
+        .map(|f| f.notes)
+        .unwrap_or_default()
+}
+
+fn save_recent_notes(vault_root: &Path, notes: &[String]) {
+    #[derive(serde::Serialize)]
+    struct File<'a> {
+        notes: &'a [String],
+    }
+    let dir = vault_root.join(".celestine");
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(body) = toml::to_string_pretty(&File { notes }) {
+        let _ = std::fs::write(recent_notes_path(vault_root), body);
     }
 }
 
@@ -2142,13 +2468,41 @@ fn line_gutter_width(lines: usize, font_size: f32) -> f32 {
     digits.max(2) as f32 * font_size * 0.62 + 10.0
 }
 
-/// Preferred L/R note padding, reduced when the pane is too narrow to keep `min_text`.
+/// Adaptive L/R note padding.
+///
+/// `preferred_pad` is the *maximum* inset (settings / `[` `]`). On narrow panes
+/// (typical with both sidebars open) padding collapses to a few pixels so the
+/// text can use the column. Padding only grows once usable width exceeds a
+/// comfortable reading measure.
+///
 /// `chrome` is space already reserved on the left (line gutter + gap).
 /// Returns `(pad_each_side, text_width)`.
 fn note_side_pad(inner_w: f32, chrome: f32, preferred_pad: f32, min_text: f32) -> (f32, f32) {
     let usable = (inner_w - chrome).max(1.0);
     let max_pad = ((usable - min_text) * 0.5).max(0.0);
-    let pad = preferred_pad.clamp(0.0, max_pad);
+    let preferred = preferred_pad.max(0.0);
+
+    // Target text measure before we start centering with pad.
+    const COMFORT_TEXT: f32 = 680.0;
+    // Below this, pad is essentially just an edge breath.
+    const NARROW: f32 = 520.0;
+    const EDGE: f32 = 6.0;
+
+    let target = if usable <= NARROW {
+        EDGE
+    } else {
+        // Leftover past the comfort column becomes pad (both sides), capped.
+        let excess = (usable - COMFORT_TEXT).max(0.0);
+        let from_excess = excess * 0.5;
+        // Smooth ramp between NARROW and the width where preferred fully fits.
+        let full_at = COMFORT_TEXT + 2.0 * preferred;
+        let t = ((usable - NARROW) / (full_at - NARROW).max(1.0)).clamp(0.0, 1.0);
+        let t = t * t; // ease-in so mid widths stay tighter
+        let ramped = EDGE + (preferred - EDGE) * t;
+        from_excess.max(EDGE).min(ramped).min(preferred)
+    };
+
+    let pad = target.clamp(0.0, max_pad);
     let text_w = (usable - 2.0 * pad).max(40.0_f32.min(usable));
     (pad, text_w)
 }

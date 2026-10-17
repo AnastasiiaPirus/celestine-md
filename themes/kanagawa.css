@@ -1,0 +1,11 @@
+/* CelestineMD theme: kanagawa — wave blues & ink (popular Omarchy pack) */
+:root {
+  --background-primary: #1f1f28;
+  --background-secondary: #2a2a37;
+  --background-modifier-border: #54546d;
+  --text-normal: #dcd7ba;
+  --text-muted: #727169;
+  --text-accent: #7e9cd8;
+  --interactive-accent: #e6c384;
+  --selection: #363646;
+}

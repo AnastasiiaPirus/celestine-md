@@ -138,6 +138,46 @@ impl Vault {
         v
     }
 
+    /// Image files under the vault (png/jpg/gif/webp/svg/bmp), for the sidebar tree.
+    pub fn list_image_rel_paths(&self) -> Vec<String> {
+        let image_exts = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"];
+        let mut v = Vec::new();
+        for entry in WalkDir::new(&self.root)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+        {
+            let path = entry.path();
+            let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+                continue;
+            };
+            if !image_exts.iter().any(|x| x.eq_ignore_ascii_case(ext)) {
+                continue;
+            }
+            let rel = path
+                .strip_prefix(&self.root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if rel.split('/').any(|p| p.starts_with('.')) {
+                continue;
+            }
+            v.push(rel);
+        }
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    /// Notes + images for the files sidebar.
+    pub fn list_sidebar_rel_paths(&self) -> Vec<String> {
+        let mut v = self.list_md_rel_paths();
+        v.extend(self.list_image_rel_paths());
+        v.sort();
+        v.dedup();
+        v
+    }
+
     /// Create an empty folder under the vault root (`rel` uses `/` separators).
     pub fn create_folder(&mut self, rel: &str) -> Result<(), CoreError> {
         let rel = rel.trim_matches('/').replace('\\', "/");
