@@ -72,7 +72,7 @@ Most note apps either ship Electron bloat or lock you into a proprietary store.
 ## Features
 
 ### Core knowledge loop
-- **File tree** — rainbow folders, custom marks, click expand, double-click / F2 rename, keyboard focus (`Ctrl+Tab`)
+- **File tree** — rainbow folders, custom marks, click expand, double-click / F2 rename, `Ctrl+Tab` toggles files ↔ editor
 - **Fuzzy quick open** — `Ctrl/Cmd+O`
 - **Command palette** — `Ctrl/Cmd+P`
 - **Wikilinks** `[[Note]]`, aliases, heading jumps, embeds `![[…]]`
@@ -168,7 +168,7 @@ Mod = **Ctrl** on Linux/Windows, **Cmd** on macOS.
 | `Mod+E` | Toggle edit / preview |
 | `Mod+S` / `Mod+N` / `Mod+W` | Save / new note / close tab |
 | `Alt+←` / `Alt+→` | Previous / next tab |
-| `Ctrl+Tab` | Focus file tree (↑↓←→ · Enter · F2) |
+| `Ctrl+Tab` | Toggle files ↔ editor (↑↓←→ · Enter · F2 in tree) |
 | `F2` / `Mod+Shift+N` | Rename / new folder |
 | `Mod+B` / `Mod+\` | Toggle files / outline sidebars |
 | `Mod+[` / `Mod+]` | Navigate back / forward |

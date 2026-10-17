@@ -33,7 +33,7 @@ Opening a folder that also contains `.obsidian/` is fine: Celestine reads the Ma
 
 ### Navigation chrome
 - **Files** sidebar: rainbow folder colors (theme-seeded), Lucide/flea folder marks, click expand/collapse, double-click / **F2** rename, new folder, delete (empty folders / notes)
-- Keyboard file tree: **Ctrl+Tab** focus, ↑↓ move, ←→ fold/unfold, Enter open
+- Keyboard file tree: **Ctrl+Tab** toggles files ↔ editor, ↑↓ move, ←→ fold/unfold, Enter open
 - **Outline** + **backlinks** on the right; reveal active note in tree
 - **Graph** view with folder-tinted clusters
 - Sidebars toggle independently; nav back / forward history
@@ -56,7 +56,7 @@ Mod = **Ctrl** on Linux/Windows, **Cmd** on macOS. Omarchy detection prefers the
 | `Mod+E` | Edit ↔ preview |
 | `Mod+S` / `Mod+N` / `Mod+W` | Save / new note / close tab |
 | `Alt+←` / `Alt+→` | Previous / next tab |
-| `Ctrl+Tab` | Focus file tree (toggle) |
+| `Ctrl+Tab` | Toggle files ↔ editor |
 | `Ctrl+1..9` | Jump tab (Omarchy profile) |
 | `F2` / `Mod+Shift+N` / `Delete` | Rename / new folder / delete (tree) |
 | `Mod+B` / `Mod+\` | Toggle files / outline sidebars |

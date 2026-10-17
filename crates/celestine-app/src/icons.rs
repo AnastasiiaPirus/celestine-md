@@ -75,6 +75,8 @@ fn path(name: &str) -> &'static str {
         "trash" => "M3 6h18 M8 6V3h8v3 M6 6l1.2 15h9.6L18 6",
         "graph" => "M3 3v18h18 M7 14l4-4 3 3 5-6",
         "vault" => "M3 7h18v14H3z M8 7V5h8v2 M12 13v4",
+        "eye" => "M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z M12 9A3 3 0 1 0 12.01 9",
+        "pencil" => "M12 20h9 M16.5 3.5l4 4L7 21H3v-4L16.5 3.5z",
         _ => "folder",
     }
 }
@@ -143,6 +145,8 @@ fn known_static(name: &str) -> &'static str {
         "trash" => "trash",
         "graph" => "graph",
         "vault" => "vault",
+        "eye" => "eye",
+        "pencil" => "pencil",
         _ => "folder",
     }
 }

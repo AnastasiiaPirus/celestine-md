@@ -68,7 +68,7 @@ impl Command {
             Command::NextTab => "Next tab",
             Command::PrevTab => "Previous tab",
             Command::FormerTab => "Former tab",
-            Command::FocusFiles => "Focus file tree",
+            Command::FocusFiles => "Toggle files ↔ editor",
             Command::FocusOutline => "Focus outline",
             Command::NextPane => "Next pane",
             Command::PrevPane => "Previous pane",

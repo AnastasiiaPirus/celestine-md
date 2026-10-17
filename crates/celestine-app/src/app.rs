@@ -75,6 +75,8 @@ pub struct CelestineApp {
     nav_forward: Vec<String>,
     find_query: String,
     editor_focused: bool,
+    /// One-shot: put the text caret back in the note editor (e.g. after Ctrl+Tab).
+    editor_focus_pending: bool,
     last_frame: Instant,
     persist: AppState,
     tree_expanded: HashSet<String>,
@@ -137,6 +139,7 @@ impl CelestineApp {
             nav_forward: Vec::new(),
             find_query: String::new(),
             editor_focused: false,
+            editor_focus_pending: false,
             last_frame: Instant::now(),
             persist,
             tree_expanded: HashSet::new(),
@@ -464,15 +467,7 @@ impl CelestineApp {
                 }
             }
             Command::Save => self.save_active(),
-            Command::TogglePreview => {
-                if let Some(t) = self.tabs.get_mut(self.active_tab) {
-                    if t.kind == TabKind::Image {
-                        self.status = "image viewer (read-only)".into();
-                    } else {
-                        t.preview_mode = !t.preview_mode;
-                    }
-                }
-            }
+            Command::TogglePreview => self.toggle_preview_mode(),
             Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Command::Escape => {
                 if self.tree_rename.is_some() {
@@ -480,7 +475,7 @@ impl CelestineApp {
                 } else if self.overlay != Overlay::None {
                     self.overlay = Overlay::None;
                 } else if self.focus == FocusPane::Files {
-                    self.focus = FocusPane::Editor;
+                    self.focus_editor();
                 } else if self.show_graph {
                     self.show_graph = false;
                 }
@@ -504,12 +499,14 @@ impl CelestineApp {
                 self.active_tab = f;
             }
             Command::FocusFiles => {
+                // Toggle: file tree ↔ note editor (caret follows).
                 if self.focus == FocusPane::Files {
-                    self.focus = FocusPane::Editor;
+                    self.focus_editor();
                 } else {
                     self.persist.show_left_sidebar = true;
                     self.focus = FocusPane::Files;
                     self.editor_focused = false;
+                    self.editor_focus_pending = false;
                     self.show_graph = false;
                     // Cursor filled on next paint via ensure_tree_cursor.
                 }
@@ -544,9 +541,40 @@ impl CelestineApp {
         ];
         let cur = panes.iter().position(|p| *p == self.focus).unwrap_or(1) as i32;
         let next = (cur + dir).rem_euclid(panes.len() as i32) as usize;
-        self.focus = panes[next];
-        if self.focus == FocusPane::Graph {
-            self.show_graph = true;
+        if panes[next] == FocusPane::Editor {
+            self.focus_editor();
+        } else {
+            self.focus = panes[next];
+            self.editor_focus_pending = false;
+            if self.focus == FocusPane::Graph {
+                self.show_graph = true;
+            }
+        }
+    }
+
+    /// Hand keyboard focus (and the text caret) back to the note editor.
+    fn focus_editor(&mut self) {
+        self.focus = FocusPane::Editor;
+        self.editor_focus_pending = true;
+    }
+
+    fn toggle_preview_mode(&mut self) {
+        let Some(t) = self.tabs.get_mut(self.active_tab) else {
+            return;
+        };
+        if t.kind == TabKind::Image {
+            self.status = "image viewer (read-only)".into();
+            return;
+        }
+        t.preview_mode = !t.preview_mode;
+        let preview = t.preview_mode;
+        let chord = self.keymap.display_chord(Command::TogglePreview);
+        if preview {
+            self.editor_focus_pending = false;
+            self.status = format!("preview · {chord} to edit");
+        } else {
+            self.focus_editor();
+            self.status = format!("edit · {chord} to preview");
         }
     }
 
@@ -1117,11 +1145,11 @@ impl eframe::App for CelestineApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let strip = match self.focus {
                         FocusPane::Files => format!(
-                            "files · ↑↓ move · ←→ fold · Enter open · Esc editor · {}",
+                            "files · ↑↓ ←→ · Enter open · {} editor",
                             self.keymap.display_chord(Command::FocusFiles)
                         ),
                         FocusPane::Editor => format!(
-                            "{} tabs · {} files · save {} · ?",
+                            "{} tabs · {} files ↔ · save {} · ?",
                             self.keymap.display_chord(Command::NextTab),
                             self.keymap.display_chord(Command::FocusFiles),
                             self.keymap.display_chord(Command::Save)
@@ -1180,7 +1208,7 @@ impl eframe::App for CelestineApp {
                             if let Some(rel) = self.handle_tree_keys(&ctx, &tree) {
                                 self.expand_ancestors(&rel);
                                 self.open_path(&rel, true);
-                                self.focus = FocusPane::Editor;
+                                self.focus_editor();
                             }
                         }
                         self.ensure_tree_cursor(&tree, active);
@@ -1222,7 +1250,7 @@ impl eframe::App for CelestineApp {
                         if let Some(rel) = outcome.open_rel {
                             self.expand_ancestors(&rel);
                             self.open_path(&rel, true);
-                            self.focus = FocusPane::Editor;
+                            self.focus_editor();
                         }
                     } else {
                         ui.label(RichText::new("(no vault)").color(muted));
@@ -1412,6 +1440,7 @@ impl eframe::App for CelestineApp {
                 let md_font = self.persist.editor_font_size;
 
                 if tab_kind == TabKind::Image {
+                    self.editor_focus_pending = false;
                     ui.horizontal(|ui| {
                         ui.label(
                             RichText::new(format!("── {rel} ──"))
@@ -1440,13 +1469,13 @@ impl eframe::App for CelestineApp {
                     }
                 } else {
                 let stats = text_stats(&self.tabs[tab_idx].buffer);
+                let mode_color = palette.heading[1];
+                let toggle_chord = self.keymap.display_chord(Command::TogglePreview);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("── {rel} ──")).monospace().color(accent));
-                    let mode = if preview_mode { "PREVIEW" } else { "EDIT" };
                     ui.label(
                         RichText::new(format!(
-                            "{mode} {} · font {:.0}px ({} {})",
-                            self.keymap.display_chord(Command::TogglePreview),
+                            "font {:.0}px ({} {})",
                             md_font,
                             self.keymap.display_chord(Command::FontBigger),
                             self.keymap.display_chord(Command::FontSmaller),
@@ -1454,6 +1483,34 @@ impl eframe::App for CelestineApp {
                         .monospace()
                         .color(muted),
                     );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // RTL: add label first so the row reads [icon · MODE · chord].
+                        let mode_icon = if preview_mode { "eye" } else { "pencil" };
+                        let mode_label = if preview_mode { "PREVIEW" } else { "EDIT" };
+                        let tip = if preview_mode {
+                            format!("Switch to edit  {toggle_chord}")
+                        } else {
+                            format!("Switch to preview  {toggle_chord}")
+                        };
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        let label = ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new(format!("{mode_label}  {toggle_chord}"))
+                                        .monospace()
+                                        .size(12.5)
+                                        .strong()
+                                        .color(mode_color),
+                                )
+                                .frame(false),
+                            )
+                            .on_hover_text(&tip);
+                        let icon = crate::icons::button(ui, mode_icon, 15.0, mode_color)
+                            .on_hover_text(&tip);
+                        if label.clicked() || icon.clicked() {
+                            self.toggle_preview_mode();
+                        }
+                    });
                 });
 
                 // Pin stats to the bottom of the note pane; editor/preview fills the rest.
@@ -1482,6 +1539,7 @@ impl eframe::App for CelestineApp {
                 const MIN_TEXT_W: f32 = 200.0_f32;
 
                 if preview_mode {
+                    self.editor_focus_pending = false;
                     let body = {
                         let buf = &self.tabs[tab_idx].buffer;
                         let parsed = extract_note_data(buf);
@@ -1652,6 +1710,10 @@ impl eframe::App for CelestineApp {
                                     ));
                                     out.state.store(ui.ctx(), id);
                                     ui.scroll_to_cursor(Some(egui::Align::TOP));
+                                    self.editor_focus_pending = false;
+                                } else if self.editor_focus_pending && editor_live {
+                                    out.response.request_focus();
+                                    self.editor_focus_pending = false;
                                 }
                                 if !editor_live {
                                     out.response.surrender_focus();
