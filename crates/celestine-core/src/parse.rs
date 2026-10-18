@@ -247,10 +247,13 @@ fn mask_code(body: &str, inline: bool) -> String {
                 continue;
             }
             let run = bytes[i..].iter().take_while(|b| **b == b'`').count();
+            // A code span cannot leave its block: search up to the next blank
+            // line, or only to the end of the line when it opens in a heading.
+            let limit = inline_block_end(body, i);
             // Find the next backtick run of exactly the same length.
             let mut j = i + run;
             let mut close = None;
-            while j < bytes.len() {
+            while j < limit {
                 if bytes[j] == b'`' {
                     let r = bytes[j..].iter().take_while(|b| **b == b'`').count();
                     if r == run {
@@ -273,6 +276,29 @@ fn mask_code(body: &str, inline: bool) -> String {
     }
 
     String::from_utf8(out).expect("masking only writes ASCII spaces")
+}
+
+/// End (exclusive) of the Markdown block containing byte `pos`: the end of the
+/// line for an ATX heading, otherwise the first blank line after `pos`.
+fn inline_block_end(body: &str, pos: usize) -> usize {
+    let line_start = body[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let line = &body[line_start..];
+    let line_end = line.find('\n').map(|i| line_start + i).unwrap_or(body.len());
+    let head = line[..line_end - line_start].trim_start_matches(' ');
+    let hashes = head.bytes().take_while(|b| *b == b'#').count();
+    if (1..=6).contains(&hashes) && head[hashes..].starts_with([' ', '\t']) {
+        return line_end;
+    }
+    let mut cursor = line_end;
+    while cursor < body.len() {
+        let rest = &body[cursor + 1..];
+        let next_end = rest.find('\n').map(|i| cursor + 1 + i).unwrap_or(body.len());
+        if body[cursor + 1..next_end].trim().is_empty() {
+            return cursor;
+        }
+        cursor = next_end;
+    }
+    body.len()
 }
 
 fn parse_wikilink_inner(inner: &str) -> (String, Option<String>, Option<String>, Option<String>) {
@@ -478,6 +504,23 @@ Also #inbox and [[Note#^block1]].
     #[test]
     fn unclosed_backtick_is_literal() {
         let p = extract_note_data("a ` b [[Link]]\n");
+        assert_eq!(p.wikilinks.len(), 1);
+    }
+
+    #[test]
+    fn stray_backtick_does_not_pair_across_paragraphs() {
+        // CommonMark code spans never cross a blank line, so the literal
+        // backtick in the first paragraph must not swallow the link and tag.
+        let src = "A literal ` here.\n\n[[Real]] #real\n\nUse `code` now.\n";
+        let p = extract_note_data(src);
+        assert_eq!(p.wikilinks.len(), 1, "{:?}", p.wikilinks);
+        assert_eq!(p.wikilinks[0].target, "Real");
+        assert_eq!(p.tags, vec!["real"]);
+    }
+
+    #[test]
+    fn backtick_in_heading_does_not_pair_with_next_line() {
+        let p = extract_note_data("# Title `\n[[Real]] `x`\n");
         assert_eq!(p.wikilinks.len(), 1);
     }
 

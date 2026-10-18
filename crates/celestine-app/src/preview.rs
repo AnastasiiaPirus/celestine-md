@@ -27,8 +27,43 @@ pub enum LinkTarget {
     External(String),
 }
 
-/// Does rendered heading text `plain` satisfy a link's `want`? Accepts the
-/// exact text or a GitHub-style slug (`my-heading`), so `[t](#my-heading)` works.
+/// How a jump target is compared against the note's headings.
+///
+/// When some heading equals the target verbatim only that text matches, so
+/// `# A B` and `# A-B` stay distinct. Otherwise GitHub-style slugs are
+/// compared, which makes `[t](#my-heading)` reach `# My Heading`.
+#[derive(Debug, Clone)]
+pub enum HeadingMatch {
+    Exact(String),
+    Slug(String),
+}
+
+impl HeadingMatch {
+    pub fn for_target(body: &str, want: &str) -> Self {
+        let want = want.trim();
+        let exact = body.lines().any(|line| {
+            let t = line.trim_start();
+            let hashes = t.bytes().take_while(|b| *b == b'#').count();
+            (1..=6).contains(&hashes)
+                && t[hashes..].starts_with([' ', '\t'])
+                && t[hashes..].trim() == want
+        });
+        if exact {
+            Self::Exact(want.to_string())
+        } else {
+            Self::Slug(slug(want))
+        }
+    }
+
+    pub fn matches(&self, plain: &str) -> bool {
+        match self {
+            Self::Exact(want) => plain.trim() == want,
+            Self::Slug(want) => slug(plain) == *want,
+        }
+    }
+}
+
+/// Does rendered heading text `plain` satisfy `want` by exact text or slug?
 pub fn heading_matches(plain: &str, want: &str) -> bool {
     let plain = plain.trim();
     let want = want.trim();
@@ -134,6 +169,7 @@ pub fn show_preview(
     heading_palette: &[Color32; 6],
 ) -> PreviewOutcome {
     let headings = HeadingColors::from_theme(heading_palette);
+    let heading_match = scroll_to_heading.map(|w| HeadingMatch::for_target(body, w));
     let prepared = preprocess(body);
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
@@ -284,8 +320,8 @@ pub fn show_preview(
                     let resp = ui.add(egui::Label::new(rt).sense(Sense::click()));
                     heading_rects.push((heading_counter, resp.rect));
                     heading_counter += 1;
-                    if let Some(want) = scroll_to_heading {
-                        if heading_matches(&plain, want) {
+                    if let Some(m) = &heading_match {
+                        if m.matches(&plain) {
                             resp.scroll_to_me(Some(egui::Align::TOP));
                         }
                     }
@@ -699,6 +735,18 @@ mod tests {
             }
         }
         assert_eq!(dests, vec!["wikilink:My Note#Deep Dive", "wikilink:#Local"]);
+    }
+
+    #[test]
+    fn exact_heading_wins_over_slug_collision() {
+        let body = "# A B\n\ntext\n\n# A-B\n";
+        // `A-B` exists verbatim, so the slug twin `A B` must not match.
+        let m = HeadingMatch::for_target(body, "A-B");
+        assert!(!m.matches("A B"));
+        assert!(m.matches("A-B"));
+        // Without an exact heading the slug fallback still works.
+        let m = HeadingMatch::for_target(body, "a-b");
+        assert!(m.matches("A B"));
     }
 
     #[test]

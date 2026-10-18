@@ -2661,17 +2661,23 @@ fn char_offset_at_line(text: &str, line: usize) -> usize {
 
 fn char_offset_for_heading(text: &str, heading: &str) -> Option<usize> {
     let heading = heading.trim();
-    for (i, line) in text.lines().enumerate() {
+    let candidates = text.lines().enumerate().filter_map(|(i, line)| {
         let trimmed = line.trim_start();
-        if !trimmed.starts_with('#') {
-            continue;
-        }
-        let after_hashes = trimmed.trim_start_matches('#').trim_start();
-        if preview::heading_matches(after_hashes, heading) {
+        trimmed
+            .starts_with('#')
+            .then(|| (i, trimmed.trim_start_matches('#').trim_start()))
+    });
+    // Exact text first, so `# A B` and `# A-B` stay distinct; slug anchors after.
+    let mut slug_hit = None;
+    for (i, after_hashes) in candidates {
+        if after_hashes == heading {
             return Some(char_offset_at_line(text, i));
         }
+        if slug_hit.is_none() && preview::heading_matches(after_hashes, heading) {
+            slug_hit = Some(i);
+        }
     }
-    None
+    slug_hit.map(|i| char_offset_at_line(text, i))
 }
 
 struct TextStats {
@@ -2926,6 +2932,16 @@ mod tests {
         app.delete_tree_selection();
         assert!(app.nav_forward.is_empty(), "{:?}", app.nav_forward);
         assert!(!app.recent_notes.iter().any(|r| r == "B.md"));
+    }
+
+    #[test]
+    fn editor_heading_jump_prefers_exact_match_over_slug_twin() {
+        let text = "# A B\n\ntext\n\n# A-B\n";
+        let second = text.find("# A-B").unwrap();
+        assert_eq!(char_offset_for_heading(text, "A-B"), Some(second));
+        assert_eq!(char_offset_for_heading(text, "A B"), Some(0));
+        // Slug anchors still resolve when nothing matches exactly.
+        assert_eq!(char_offset_for_heading(text, "a-b"), Some(0));
     }
 
     #[test]
