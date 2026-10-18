@@ -1005,7 +1005,7 @@ impl eframe::App for CelestineApp {
             }
         }
 
-        if let Some(cmd) = self.keymap.consume(&ctx, self.editor_focused) {
+        if let Some(cmd) = self.keymap.consume(&ctx) {
             self.handle_command(cmd, &ctx);
         }
 
