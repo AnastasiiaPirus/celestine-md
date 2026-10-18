@@ -10,6 +10,8 @@ mod vault;
 pub use error::CoreError;
 pub use graph::{LinkGraph, NodeId};
 pub use index::{Heading, NoteId, NoteMeta, VaultIndex};
-pub use parse::{extract_note_data, Callout, Frontmatter, InlineLink, ParsedNote, Wikilink};
+pub use parse::{
+    extract_note_data, has_uri_scheme, Callout, Frontmatter, InlineLink, ParsedNote, Wikilink,
+};
 pub use resolve::{resolve_link, ResolvedLink};
 pub use vault::Vault;
