@@ -997,7 +997,8 @@ impl eframe::App for CelestineApp {
         // Consume background work even when eframe suppresses hidden-window UI.
         if let Some(vault) = self.vault.as_mut() {
             let was_degraded = vault.watcher_error().is_some();
-            if vault.poll_fs() && !was_degraded {
+            let changed = vault.poll_fs();
+            if changed || (!was_degraded && vault.watcher_error().is_some()) {
                 self.status = if let Some(error) = vault.watcher_error() {
                     format!("index refreshed · filesystem polling (watcher: {error})")
                 } else {
