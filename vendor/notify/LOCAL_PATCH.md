@@ -22,3 +22,7 @@ the queued shutdown is processed.
 The upstream integration test canonicalizes its temporary root before comparing
 notification paths. This preserves the path assertion on macOS, where `/var`
 and `/private/var` name the same directory but FSEvents reports the latter.
+It also waits up to one fixed ten-second deadline for the expected file event,
+retaining the exact file-path assertion while allowing unrelated parent events
+to arrive first. The fixture queues one parent event to exercise that ordering;
+the expected file event still comes from the real platform watcher.

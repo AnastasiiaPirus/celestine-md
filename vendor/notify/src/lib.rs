@@ -383,7 +383,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, time::Duration};
+    use std::{
+        fs,
+        time::{Duration, Instant},
+    };
 
     use tempfile::tempdir;
 
@@ -419,6 +422,11 @@ mod tests {
         let root = dir.path().canonicalize()?;
 
         let (tx, rx) = std::sync::mpsc::channel();
+        // Reproduce an unrelated parent event arriving first. The expected
+        // file notification must still come from the real platform watcher.
+        tx.send(Ok(
+            Event::new(EventKind::Modify(event::ModifyKind::Any)).add_path(root.clone())
+        ))?;
 
         let mut watcher = RecommendedWatcher::new(tx, Config::default())?;
 
@@ -427,10 +435,23 @@ mod tests {
         let file_path = root.join("file.txt");
         fs::write(&file_path, b"Lorem ipsum")?;
 
-        let event = rx
-            .recv_timeout(Duration::from_secs(10))
-            .expect("no events received")
-            .expect("received an error");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut observed = Vec::new();
+        let event = loop {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .unwrap_or_else(|| panic!("no event for {file_path:?}; observed {observed:?}"));
+            let event = rx
+                .recv_timeout(remaining)
+                .unwrap_or_else(|error| {
+                    panic!("no event for {file_path:?}: {error}; observed {observed:?}")
+                })
+                .expect("received a watcher error");
+            if event.paths.contains(&file_path) {
+                break event;
+            }
+            observed.push(event);
+        };
 
         assert_eq!(event.paths, vec![file_path]);
 

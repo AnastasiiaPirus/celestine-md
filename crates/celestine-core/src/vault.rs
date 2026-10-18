@@ -1164,10 +1164,24 @@ mod tests {
         let (mut vault, _) = queued_vault(dir.path());
         let path = vault.root.join("Keep.md");
         let id = vault.index.get_by_rel("Keep.md").unwrap().id;
-        std::fs::write(&path, [0xff; 6]).unwrap();
         let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
-        assert!(!vault.reconcile_fs(false, &HashSet::new()));
+        std::fs::write(&path, [0xff; 6]).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        vault.note_reads = 0;
+        // Force the failed read explicitly: fast same-size writes can retain
+        // the original timestamp, so metadata alone need not detect this edit.
+        assert!(!vault.reconcile_fs(false, &HashSet::from([path.clone()])));
+        assert_eq!(
+            vault.note_reads, 1,
+            "the fixture must attempt the invalid read"
+        );
         assert_eq!(vault.index.get(id).unwrap().content, "# Keep");
+        let failed_stamp = fs_entry(&path).unwrap();
         std::fs::write(&path, "# Fine").unwrap();
         std::fs::File::options()
             .write(true)
@@ -1175,7 +1189,16 @@ mod tests {
             .unwrap()
             .set_times(std::fs::FileTimes::new().set_modified(modified))
             .unwrap();
+        assert_eq!(
+            fs_entry(&path).unwrap(),
+            failed_stamp,
+            "retry with unchanged metadata"
+        );
         assert!(vault.reconcile_fs(false, &HashSet::new()));
+        assert_eq!(
+            vault.note_reads, 2,
+            "a failed read must be retried without a new hint"
+        );
         assert_eq!(vault.index.get(id).unwrap().content, "# Fine");
     }
 
