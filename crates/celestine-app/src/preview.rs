@@ -1,5 +1,5 @@
 use crate::media::{self, is_image_target};
-use celestine_core::{resolve_link, ResolvedLink, VaultIndex};
+use celestine_core::{has_uri_scheme, resolve_link, ResolvedLink, VaultIndex};
 use egui::{Color32, FontId, RichText, Sense, Stroke, TextStyle, Ui, Vec2};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use regex::Regex;
@@ -7,9 +7,44 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 pub struct PreviewOutcome {
-    pub open_rel: Option<String>,
+    /// A link the user clicked this frame.
+    pub link: Option<LinkTarget>,
     /// Heading text that was rendered this frame (for scroll targets).
     pub heading_rects: Vec<(usize, egui::Rect)>, // line index approx via counter
+}
+
+/// Where a clicked preview link leads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkTarget {
+    /// A vault note (`rel` ends in `.md`; it may not exist yet) and an
+    /// optional heading to scroll to.
+    Note { rel: String, heading: Option<String> },
+    /// An image under the vault.
+    Image(String),
+    /// A heading in the note being previewed (`[[#H]]`, `[t](#anchor)`).
+    Heading(String),
+    /// Anything with a URI scheme: open with the system handler.
+    External(String),
+}
+
+/// Does rendered heading text `plain` satisfy a link's `want`? Accepts the
+/// exact text or a GitHub-style slug (`my-heading`), so `[t](#my-heading)` works.
+pub fn heading_matches(plain: &str, want: &str) -> bool {
+    let plain = plain.trim();
+    let want = want.trim();
+    plain == want || slug(plain) == slug(want)
+}
+
+fn slug(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.trim().to_lowercase().chars() {
+        if c.is_alphanumeric() {
+            out.push(c);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_matches('-').to_string()
 }
 
 struct HeadingColors {
@@ -64,16 +99,18 @@ fn preprocess(body: &str) -> String {
             Some((t, d)) => (t.trim(), d.trim()),
             None => (inner.trim(), inner.trim()),
         };
-        let target = target.split('#').next().unwrap_or(target);
+        let file = target.split('#').next().unwrap_or(target);
         if embed {
-            if is_image_target(target) {
+            if is_image_target(file) {
                 // Render as a real markdown image so the preview can show pixels.
-                out.push_str(&format!("![{display}]({target})"));
+                out.push_str(&format!("![{display}](<{file}>)"));
             } else {
-                out.push_str(&format!("*[embed: {display}]* (`wikilink:{target}`)"));
+                out.push_str(&format!("*[embed: {display}]* (`wikilink:{file}`)"));
             }
         } else {
-            out.push_str(&format!("[{display}](wikilink:{target})"));
+            // Keep `#Heading` so the click can scroll; `<…>` lets the
+            // destination contain spaces.
+            out.push_str(&format!("[{display}](<wikilink:{target}>)"));
         }
         last = m.end();
     }
@@ -105,7 +142,7 @@ pub fn show_preview(
     options.insert(Options::ENABLE_FOOTNOTES);
 
     let parser = Parser::new_ext(&prepared, options);
-    let mut open_rel = None;
+    let mut link: Option<LinkTarget> = None;
     let mut heading_rects = Vec::new();
     let mut heading_counter = 0usize;
 
@@ -133,7 +170,7 @@ pub fn show_preview(
 
     let flush_paragraph = |ui: &mut Ui,
                            buf: &mut Vec<(RichText, Option<String>)>,
-                           open: &mut Option<String>,
+                           open: &mut Option<LinkTarget>,
                            index: &VaultIndex,
                            note_rel: &str| {
         if buf.is_empty() {
@@ -212,14 +249,14 @@ pub fn show_preview(
                                 flush_paragraph(
                                     ui,
                                     &mut paragraph_buf,
-                                    &mut open_rel,
+                                    &mut link,
                                     index,
                                     note_rel,
                                 );
                             });
                         });
                     } else {
-                        flush_paragraph(ui, &mut paragraph_buf, &mut open_rel, index, note_rel);
+                        flush_paragraph(ui, &mut paragraph_buf, &mut link, index, note_rel);
                     }
                 }
                 Event::Start(Tag::Heading { level, .. }) => {
@@ -248,7 +285,7 @@ pub fn show_preview(
                     heading_rects.push((heading_counter, resp.rect));
                     heading_counter += 1;
                     if let Some(want) = scroll_to_heading {
-                        if plain.trim() == want.trim() {
+                        if heading_matches(&plain, want) {
                             resp.scroll_to_me(Some(egui::Align::TOP));
                         }
                     }
@@ -283,7 +320,7 @@ pub fn show_preview(
                     link_dest = None;
                 }
                 Event::Start(Tag::Image { dest_url, .. }) => {
-                    flush_paragraph(ui, &mut paragraph_buf, &mut open_rel, index, note_rel);
+                    flush_paragraph(ui, &mut paragraph_buf, &mut link, index, note_rel);
                     image_dest = Some(dest_url.to_string());
                     image_alt.clear();
                 }
@@ -309,7 +346,7 @@ pub fn show_preview(
                         let resp = resp.on_hover_text(tip);
                         if resp.clicked() {
                             if let Some(rel) = media::abs_to_rel(vault_root, &abs) {
-                                open_rel = Some(rel);
+                                link = Some(LinkTarget::Image(rel));
                             }
                         }
                     } else {
@@ -372,7 +409,7 @@ pub fn show_preview(
                     }
                 }
                 Event::Start(Tag::List(start)) => {
-                    flush_paragraph(ui, &mut paragraph_buf, &mut open_rel, index, note_rel);
+                    flush_paragraph(ui, &mut paragraph_buf, &mut link, index, note_rel);
                     list_depth += 1;
                     ordered_list = start.is_some();
                     item_index = start.unwrap_or(1) as u32;
@@ -404,7 +441,7 @@ pub fn show_preview(
                                 let resp = ui.add(egui::Label::new(rt).sense(Sense::click()));
                                 if resp.clicked() {
                                     if let Some(r) = resolve_dest(index, note_rel, &d) {
-                                        open_rel = Some(r);
+                                        link = Some(r);
                                     }
                                 }
                             } else {
@@ -414,7 +451,7 @@ pub fn show_preview(
                     });
                 }
                 Event::Start(Tag::BlockQuote(_)) => {
-                    flush_paragraph(ui, &mut paragraph_buf, &mut open_rel, index, note_rel);
+                    flush_paragraph(ui, &mut paragraph_buf, &mut link, index, note_rel);
                     in_blockquote = true;
                 }
                 Event::End(TagEnd::BlockQuote(_)) => {
@@ -422,7 +459,7 @@ pub fn show_preview(
                     ui.add_space(4.0);
                 }
                 Event::Start(Tag::CodeBlock(kind)) => {
-                    flush_paragraph(ui, &mut paragraph_buf, &mut open_rel, index, note_rel);
+                    flush_paragraph(ui, &mut paragraph_buf, &mut link, index, note_rel);
                     in_code_block = true;
                     code_buf.clear();
                     let _ = kind;
@@ -448,7 +485,7 @@ pub fn show_preview(
                     ui.add_space(8.0);
                 }
                 Event::Start(Tag::Table(_)) => {
-                    flush_paragraph(ui, &mut paragraph_buf, &mut open_rel, index, note_rel);
+                    flush_paragraph(ui, &mut paragraph_buf, &mut link, index, note_rel);
                     in_table = true;
                     table_rows.clear();
                 }
@@ -497,7 +534,7 @@ pub fn show_preview(
                     table_row.push(std::mem::take(&mut cell_buf));
                 }
                 Event::Rule => {
-                    flush_paragraph(ui, &mut paragraph_buf, &mut open_rel, index, note_rel);
+                    flush_paragraph(ui, &mut paragraph_buf, &mut link, index, note_rel);
                     ui.add(egui::Separator::default().spacing(12.0));
                 }
                 Event::TaskListMarker(checked) => {
@@ -520,29 +557,54 @@ pub fn show_preview(
                 _ => {}
             }
         }
-        flush_paragraph(ui, &mut paragraph_buf, &mut open_rel, index, note_rel);
+        flush_paragraph(ui, &mut paragraph_buf, &mut link, index, note_rel);
     });
 
     let _ = (code_span, FontId::default(), TextStyle::Body, Vec2::ZERO, in_table);
     PreviewOutcome {
-        open_rel,
+        link,
         heading_rects,
     }
 }
 
-fn resolve_dest(index: &VaultIndex, note_rel: &str, dest: &str) -> Option<String> {
+fn resolve_dest(index: &VaultIndex, note_rel: &str, dest: &str) -> Option<LinkTarget> {
     let dest = dest.trim();
-    let target = dest.strip_prefix("wikilink:").unwrap_or(dest);
-    if target.starts_with("http://") || target.starts_with("https://") {
-        return None;
+    let (target, fragment) = match dest.strip_prefix("wikilink:") {
+        Some(inner) => split_fragment(inner),
+        None => {
+            if has_uri_scheme(dest) {
+                return Some(LinkTarget::External(dest.to_string()));
+            }
+            split_fragment(dest)
+        }
+    };
+    let heading = fragment
+        .map(|f| f.trim_start_matches('^').trim().to_string())
+        .filter(|f| !f.is_empty());
+    if target.is_empty() {
+        // `[[#Heading]]` / `[t](#anchor)`: stay in this note.
+        return heading.map(LinkTarget::Heading);
     }
     if is_image_target(target) {
-        return Some(target.replace('\\', "/"));
+        return Some(LinkTarget::Image(target.replace('\\', "/")));
     }
     match resolve_link(index, note_rel, target) {
-        ResolvedLink::Note(id) => index.get(id).map(|n| n.rel.clone()),
-        ResolvedLink::Missing { target } => Some(ensure_md(&target)),
-        ResolvedLink::External { .. } => None,
+        ResolvedLink::Note(id) => index.get(id).map(|n| LinkTarget::Note {
+            rel: n.rel.clone(),
+            heading,
+        }),
+        ResolvedLink::Missing { target } => Some(LinkTarget::Note {
+            rel: ensure_md(&target),
+            heading,
+        }),
+        ResolvedLink::External { url } => Some(LinkTarget::External(url)),
+    }
+}
+
+fn split_fragment(dest: &str) -> (&str, Option<&str>) {
+    match dest.split_once('#') {
+        Some((t, f)) => (t.trim(), Some(f)),
+        None => (dest.trim(), None),
     }
 }
 
@@ -551,5 +613,99 @@ fn ensure_md(target: &str) -> String {
         target.to_string()
     } else {
         format!("{target}.md")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn index_with(rels: &[&str]) -> (tempfile::TempDir, VaultIndex) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = VaultIndex::new();
+        for rel in rels {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, format!("# {rel}\n")).unwrap();
+            index.upsert_file(dir.path(), &path).unwrap();
+        }
+        (dir, index)
+    }
+
+    #[test]
+    fn heading_only_wikilink_jumps_within_current_note() {
+        let (_d, index) = index_with(&["Home.md"]);
+        assert_eq!(
+            resolve_dest(&index, "Home.md", "wikilink:#Section"),
+            Some(LinkTarget::Heading("Section".into()))
+        );
+    }
+
+    #[test]
+    fn anchor_link_jumps_within_current_note() {
+        let (_d, index) = index_with(&["Home.md"]);
+        assert_eq!(
+            resolve_dest(&index, "Home.md", "#anchor"),
+            Some(LinkTarget::Heading("anchor".into()))
+        );
+    }
+
+    #[test]
+    fn scheme_links_are_external() {
+        let (_d, index) = index_with(&["Home.md"]);
+        for url in ["mailto:x@y.z", "https://example.com", "obsidian://open"] {
+            assert_eq!(
+                resolve_dest(&index, "Home.md", url),
+                Some(LinkTarget::External(url.into())),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn note_links_keep_their_heading() {
+        let (_d, index) = index_with(&["Home.md", "Other.md"]);
+        assert_eq!(
+            resolve_dest(&index, "Home.md", "wikilink:Other#Part"),
+            Some(LinkTarget::Note {
+                rel: "Other.md".into(),
+                heading: Some("Part".into()),
+            })
+        );
+        assert_eq!(
+            resolve_dest(&index, "Home.md", "wikilink:Other"),
+            Some(LinkTarget::Note {
+                rel: "Other.md".into(),
+                heading: None,
+            })
+        );
+        // Missing notes are still offered for creation, with a real name.
+        assert_eq!(
+            resolve_dest(&index, "Home.md", "wikilink:Brand New"),
+            Some(LinkTarget::Note {
+                rel: "Brand New.md".into(),
+                heading: None,
+            })
+        );
+    }
+
+    #[test]
+    fn preprocess_keeps_wikilink_heading_and_survives_markdown_parse() {
+        let out = preprocess("See [[My Note#Deep Dive|here]] and [[#Local]].");
+        let mut dests = Vec::new();
+        for ev in Parser::new_ext(&out, Options::empty()) {
+            if let Event::Start(Tag::Link { dest_url, .. }) = ev {
+                dests.push(dest_url.to_string());
+            }
+        }
+        assert_eq!(dests, vec!["wikilink:My Note#Deep Dive", "wikilink:#Local"]);
+    }
+
+    #[test]
+    fn heading_match_accepts_slug_anchors() {
+        assert!(heading_matches("My Heading", "My Heading"));
+        assert!(heading_matches("My Heading", "my-heading"));
+        assert!(heading_matches("Setup & Install", "setup--install"));
+        assert!(!heading_matches("My Heading", "other"));
     }
 }
