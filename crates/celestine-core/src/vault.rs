@@ -1,14 +1,14 @@
 use crate::graph::LinkGraph;
 use crate::index::VaultIndex;
+use crate::path::{canonical_note_target, checked_rel, resolve_vault_path};
 use crate::CoreError;
-use crate::resolve_vault_path;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use walkdir::WalkDir;
 
 pub struct Vault {
-    pub root: PathBuf,
+    root: PathBuf,
     pub index: VaultIndex,
     pub graph: LinkGraph,
     _watcher: Option<RecommendedWatcher>,
@@ -17,7 +17,7 @@ pub struct Vault {
 
 impl Vault {
     pub fn open(root: impl AsRef<Path>) -> Result<Self, CoreError> {
-        let root = root.as_ref().canonicalize().unwrap_or_else(|_| root.as_ref().to_path_buf());
+        let root = root.as_ref().canonicalize()?;
         if !root.is_dir() {
             return Err(CoreError::NotADirectory(root));
         }
@@ -64,16 +64,65 @@ impl Vault {
         self.graph = LinkGraph::rebuild(&self.index);
     }
 
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn abs_path(&self, rel: &str) -> Result<PathBuf, CoreError> {
+        resolve_vault_path(&self.root, Path::new(rel))
+    }
+
+    /// Return the canonical vault-relative path for an existing in-vault file.
+    pub fn rel_of(&self, path: &Path) -> Result<String, CoreError> {
+        let resolved = crate::path::resolve_vault_abs(&self.root, path)?;
+        let (_, rel) = canonical_note_target(resolved)?;
+        Ok(rel)
+    }
+
+    pub fn read_metadata(&self, name: &str) -> Result<String, CoreError> {
+        let path = self.metadata_path(name)?;
+        Ok(std::fs::read_to_string(path)?)
+    }
+
+    pub fn write_metadata(&self, name: &str, content: &str) -> Result<(), CoreError> {
+        let path = self.metadata_path(name)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, content)?;
+        Ok(())
+    }
+
+    fn metadata_path(&self, name: &str) -> Result<PathBuf, CoreError> {
+        let name_path = Path::new(name);
+        if name.is_empty()
+            || name.contains('/')
+            || name.contains('\\')
+            || name_path.components().count() != 1
+            || !matches!(
+                name_path.components().next(),
+                Some(std::path::Component::Normal(_))
+            )
+        {
+            return Err(CoreError::InvalidVaultPath(format!(
+                "{name:?}: metadata name must be one path component"
+            )));
+        }
+        resolve_vault_path(&self.root, &Path::new(".celestine").join(name))
+    }
+
     /// Drain filesystem events and update index.
     pub fn poll_fs(&mut self) -> bool {
         let Some(rx) = &self.rx else {
             return false;
         };
         let mut dirty = false;
+        let mut graph_dirty = false;
         while let Ok(Ok(event)) = rx.try_recv() {
             match event.kind {
                 EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
                     for path in event.paths {
+                        dirty = true;
                         if path.extension().and_then(|e| e.to_str()) != Some("md") {
                             continue;
                         }
@@ -82,13 +131,13 @@ impl Vault {
                         } else {
                             self.index.remove_path(&self.root, &path);
                         }
-                        dirty = true;
+                        graph_dirty = true;
                     }
                 }
                 _ => {}
             }
         }
-        if dirty {
+        if graph_dirty {
             self.rebuild_graph();
         }
         dirty
@@ -155,11 +204,9 @@ impl Vault {
             if !image_exts.iter().any(|x| x.eq_ignore_ascii_case(ext)) {
                 continue;
             }
-            let rel = path
-                .strip_prefix(&self.root)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .replace('\\', "/");
+            let Ok(rel) = checked_rel(&self.root, path) else {
+                continue;
+            };
             if rel.split('/').any(|p| p.starts_with('.')) {
                 continue;
             }
@@ -191,16 +238,8 @@ impl Vault {
     pub fn rename_entry(&mut self, old_rel: &str, new_rel: &str) -> Result<(), CoreError> {
         let old_path = resolve_vault_path(&self.root, Path::new(old_rel))?;
         let new_path = resolve_vault_path(&self.root, Path::new(new_rel))?;
-        let old_rel = old_path
-            .strip_prefix(&self.root)
-            .unwrap_or(&old_path)
-            .to_string_lossy()
-            .replace('\\', "/");
-        let new_rel = new_path
-            .strip_prefix(&self.root)
-            .unwrap_or(&new_path)
-            .to_string_lossy()
-            .replace('\\', "/");
+        let old_rel = checked_rel(&self.root, &old_path)?;
+        let new_rel = checked_rel(&self.root, &new_path)?;
         if old_rel.is_empty() || new_rel.is_empty() || old_rel == new_rel {
             return Ok(());
         }
@@ -253,11 +292,7 @@ impl Vault {
     /// Delete a note file, or an empty folder.
     pub fn delete_entry(&mut self, rel: &str) -> Result<(), CoreError> {
         let path = resolve_vault_path(&self.root, Path::new(rel))?;
-        let rel = path
-            .strip_prefix(&self.root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .replace('\\', "/");
+        let rel = checked_rel(&self.root, &path)?;
         if path.is_dir() {
             let empty = std::fs::read_dir(&path)?.next().is_none();
             if !empty {

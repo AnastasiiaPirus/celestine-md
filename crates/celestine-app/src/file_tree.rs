@@ -519,14 +519,8 @@ fn brighten(c: Color32, factor: f32) -> Color32 {
 }
 
 /// Load/save per-vault folder icon map from `.celestine/folder-icons.toml`.
-pub fn load_folder_icons(vault_root: &Path) -> HashMap<String, String> {
-    let Ok(path) = celestine_core::resolve_vault_path(
-        vault_root,
-        Path::new(".celestine/folder-icons.toml"),
-    ) else {
-        return HashMap::new();
-    };
-    let Ok(text) = std::fs::read_to_string(&path) else {
+pub fn load_folder_icons(vault: &celestine_core::Vault) -> HashMap<String, String> {
+    let Ok(text) = vault.read_metadata("folder-icons.toml") else {
         return HashMap::new();
     };
     #[derive(serde::Deserialize, Default)]
@@ -544,17 +538,7 @@ pub fn load_folder_icons(vault_root: &Path) -> HashMap<String, String> {
     icons
 }
 
-pub fn save_folder_icons(vault_root: &Path, icons: &HashMap<String, String>) {
-    let Ok(path) = celestine_core::resolve_vault_path(
-        vault_root,
-        Path::new(".celestine/folder-icons.toml"),
-    ) else {
-        return;
-    };
-    let Some(dir) = path.parent() else {
-        return;
-    };
-    let _ = std::fs::create_dir_all(&dir);
+pub fn save_folder_icons(vault: &celestine_core::Vault, icons: &HashMap<String, String>) {
     let mut map = BTreeMap::new();
     for (k, v) in icons {
         map.insert(k.clone(), v.clone());
@@ -563,7 +547,7 @@ pub fn save_folder_icons(vault_root: &Path, icons: &HashMap<String, String>) {
         Ok(s) => s,
         Err(_) => return,
     };
-    let _ = std::fs::write(path, body);
+    let _ = vault.write_metadata("folder-icons.toml", &body);
 }
 
 #[cfg(test)]
@@ -581,8 +565,9 @@ mod folder_icon_boundary_tests {
         std::fs::write(&sentinel, "[icons]\n\"notes\" = \"heart\"\n").unwrap();
         symlink(outside.path(), vault.path().join(".celestine")).unwrap();
 
-        assert!(load_folder_icons(vault.path()).is_empty());
-        save_folder_icons(vault.path(), &HashMap::from([("notes".into(), "star".into())]));
+        let vault = celestine_core::Vault::open(vault.path()).unwrap();
+        assert!(load_folder_icons(&vault).is_empty());
+        save_folder_icons(&vault, &HashMap::from([("notes".into(), "star".into())]));
         assert_eq!(
             std::fs::read_to_string(sentinel).unwrap(),
             "[icons]\n\"notes\" = \"heart\"\n"
