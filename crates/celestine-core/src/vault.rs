@@ -1,6 +1,7 @@
 use crate::graph::LinkGraph;
 use crate::index::VaultIndex;
 use crate::CoreError;
+use crate::resolve_vault_path;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
@@ -94,12 +95,12 @@ impl Vault {
     }
 
     pub fn read_note_content(&self, rel: &str) -> Result<String, CoreError> {
-        let path = self.root.join(rel);
+        let path = resolve_vault_path(&self.root, Path::new(rel))?;
         Ok(std::fs::read_to_string(path)?)
     }
 
     pub fn write_note(&mut self, rel: &str, content: &str) -> Result<(), CoreError> {
-        let path = self.root.join(rel);
+        let path = resolve_vault_path(&self.root, Path::new(rel))?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -114,8 +115,8 @@ impl Vault {
         if !rel.to_lowercase().ends_with(".md") {
             rel.push_str(".md");
         }
-        let path = self.root.join(&rel);
-        if path.exists() {
+        let path = resolve_vault_path(&self.root, Path::new(&rel))?;
+        if std::fs::symlink_metadata(&path).is_ok() {
             return Ok(());
         }
         if let Some(parent) = path.parent() {
@@ -180,14 +181,7 @@ impl Vault {
 
     /// Create an empty folder under the vault root (`rel` uses `/` separators).
     pub fn create_folder(&mut self, rel: &str) -> Result<(), CoreError> {
-        let rel = rel.trim_matches('/').replace('\\', "/");
-        if rel.is_empty() {
-            return Err(CoreError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "empty folder path",
-            )));
-        }
-        let path = self.root.join(&rel);
+        let path = resolve_vault_path(&self.root, Path::new(rel))?;
         std::fs::create_dir_all(&path)?;
         Ok(())
     }
@@ -195,19 +189,21 @@ impl Vault {
     /// Rename a folder or note. `old_rel` / `new_rel` are vault-relative (`/` separators).
     /// For folders, all notes under the prefix are reindexed.
     pub fn rename_entry(&mut self, old_rel: &str, new_rel: &str) -> Result<(), CoreError> {
-        let old_rel = normalize_vault_rel(old_rel);
-        let new_rel = normalize_vault_rel(new_rel);
+        let old_path = resolve_vault_path(&self.root, Path::new(old_rel))?;
+        let new_path = resolve_vault_path(&self.root, Path::new(new_rel))?;
+        let old_rel = old_path
+            .strip_prefix(&self.root)
+            .unwrap_or(&old_path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let new_rel = new_path
+            .strip_prefix(&self.root)
+            .unwrap_or(&new_path)
+            .to_string_lossy()
+            .replace('\\', "/");
         if old_rel.is_empty() || new_rel.is_empty() || old_rel == new_rel {
             return Ok(());
         }
-        if new_rel.contains("..") {
-            return Err(CoreError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "invalid path",
-            )));
-        }
-        let old_path = self.root.join(&old_rel);
-        let new_path = self.root.join(&new_rel);
         if !old_path.exists() {
             return Err(CoreError::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -256,8 +252,12 @@ impl Vault {
 
     /// Delete a note file, or an empty folder.
     pub fn delete_entry(&mut self, rel: &str) -> Result<(), CoreError> {
-        let rel = normalize_vault_rel(rel);
-        let path = self.root.join(&rel);
+        let path = resolve_vault_path(&self.root, Path::new(rel))?;
+        let rel = path
+            .strip_prefix(&self.root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
         if path.is_dir() {
             let empty = std::fs::read_dir(&path)?.next().is_none();
             if !empty {
@@ -279,8 +279,4 @@ impl Vault {
         }
         Ok(())
     }
-}
-
-fn normalize_vault_rel(rel: &str) -> String {
-    rel.trim_matches('/').replace('\\', "/")
 }

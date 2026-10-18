@@ -520,7 +520,12 @@ fn brighten(c: Color32, factor: f32) -> Color32 {
 
 /// Load/save per-vault folder icon map from `.celestine/folder-icons.toml`.
 pub fn load_folder_icons(vault_root: &Path) -> HashMap<String, String> {
-    let path = vault_root.join(".celestine").join("folder-icons.toml");
+    let Ok(path) = celestine_core::resolve_vault_path(
+        vault_root,
+        Path::new(".celestine/folder-icons.toml"),
+    ) else {
+        return HashMap::new();
+    };
     let Ok(text) = std::fs::read_to_string(&path) else {
         return HashMap::new();
     };
@@ -540,9 +545,16 @@ pub fn load_folder_icons(vault_root: &Path) -> HashMap<String, String> {
 }
 
 pub fn save_folder_icons(vault_root: &Path, icons: &HashMap<String, String>) {
-    let dir = vault_root.join(".celestine");
+    let Ok(path) = celestine_core::resolve_vault_path(
+        vault_root,
+        Path::new(".celestine/folder-icons.toml"),
+    ) else {
+        return;
+    };
+    let Some(dir) = path.parent() else {
+        return;
+    };
     let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join("folder-icons.toml");
     let mut map = BTreeMap::new();
     for (k, v) in icons {
         map.insert(k.clone(), v.clone());
@@ -552,6 +564,30 @@ pub fn save_folder_icons(vault_root: &Path, icons: &HashMap<String, String>) {
         Err(_) => return,
     };
     let _ = std::fs::write(path, body);
+}
+
+#[cfg(test)]
+mod folder_icon_boundary_tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn folder_icons_do_not_read_or_write_through_external_metadata_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let vault = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let sentinel = outside.path().join("folder-icons.toml");
+        std::fs::write(&sentinel, "[icons]\n\"notes\" = \"heart\"\n").unwrap();
+        symlink(outside.path(), vault.path().join(".celestine")).unwrap();
+
+        assert!(load_folder_icons(vault.path()).is_empty());
+        save_folder_icons(vault.path(), &HashMap::from([("notes".into(), "star".into())]));
+        assert_eq!(
+            std::fs::read_to_string(sentinel).unwrap(),
+            "[icons]\n\"notes\" = \"heart\"\n"
+        );
+    }
 }
 
 #[derive(serde::Serialize)]

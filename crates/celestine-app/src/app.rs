@@ -276,10 +276,17 @@ impl CelestineApp {
             .map(|t| t.rel.as_str())
             .unwrap_or("");
         let images = vault.list_image_rel_paths();
-        let resolved_rel = crate::media::resolve_image_abs(&vault.root, note_rel, rel, &images)
+        let Some(resolved_rel) = crate::media::resolve_image_abs(&vault.root, note_rel, rel, &images)
             .and_then(|abs| crate::media::abs_to_rel(&vault.root, &abs))
-            .unwrap_or_else(|| rel.replace('\\', "/"));
-        let abs = vault.root.join(&resolved_rel);
+        else {
+            self.status = format!("missing image {rel}");
+            return;
+        };
+        let Ok(abs) = celestine_core::resolve_vault_path(&vault.root, Path::new(&resolved_rel))
+        else {
+            self.status = format!("missing image {rel}");
+            return;
+        };
         if !abs.is_file() {
             self.status = format!("missing image {rel}");
             return;
@@ -885,11 +892,10 @@ impl CelestineApp {
             } else {
                 format!("{parent}/{name}")
             };
-            let exists = self
-                .vault
-                .as_ref()
-                .map(|v| v.root.join(&candidate).exists())
-                .unwrap_or(false);
+            let exists = self.vault.as_ref().is_some_and(|v| {
+                celestine_core::resolve_vault_path(&v.root, Path::new(&candidate))
+                    .is_ok_and(|path| path.exists())
+            });
             if !exists {
                 break candidate;
             }
@@ -1543,7 +1549,6 @@ impl eframe::App for CelestineApp {
                     let fill_h = ui.available_height().max(80.0);
                     let fill_w = ui.available_width().max(1.0);
                     if let Some(vault) = &self.vault {
-                        let abs = vault.root.join(&rel);
                         ScrollArea::both()
                             .id_salt("image-scroll")
                             .auto_shrink([false, false])
@@ -1551,7 +1556,20 @@ impl eframe::App for CelestineApp {
                             .min_scrolled_height(fill_h)
                             .show(ui, |ui| {
                                 ui.set_min_size(egui::vec2(fill_w, fill_h));
-                                crate::media::show_standalone(ui, &abs, muted);
+                                if let Ok(abs) = celestine_core::resolve_vault_path(
+                                    &vault.root,
+                                    Path::new(&rel),
+                                ) {
+                                    crate::media::show_standalone(ui, &abs, muted);
+                                } else {
+                                    ui.centered_and_justified(|ui| {
+                                        ui.label(
+                                            RichText::new(format!("missing image\n{rel}"))
+                                                .monospace()
+                                                .color(muted),
+                                        );
+                                    });
+                                }
                             });
                     }
                 } else {
@@ -2535,8 +2553,9 @@ fn overlay_scroll_list(ui: &mut Ui, list_h: f32, add_contents: impl FnOnce(&mut 
     );
 }
 
-fn recent_notes_path(vault_root: &Path) -> PathBuf {
-    vault_root.join(".celestine").join("recent-notes.toml")
+fn recent_notes_path(vault_root: &Path) -> Option<PathBuf> {
+    celestine_core::resolve_vault_path(vault_root, Path::new(".celestine/recent-notes.toml"))
+        .ok()
 }
 
 fn load_recent_notes(vault_root: &Path) -> Vec<String> {
@@ -2545,7 +2564,10 @@ fn load_recent_notes(vault_root: &Path) -> Vec<String> {
         #[serde(default)]
         notes: Vec<String>,
     }
-    let Ok(text) = std::fs::read_to_string(recent_notes_path(vault_root)) else {
+    let Some(path) = recent_notes_path(vault_root) else {
+        return Vec::new();
+    };
+    let Ok(text) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
     toml::from_str::<File>(&text)
@@ -2558,10 +2580,39 @@ fn save_recent_notes(vault_root: &Path, notes: &[String]) {
     struct File<'a> {
         notes: &'a [String],
     }
-    let dir = vault_root.join(".celestine");
+    let Some(path) = recent_notes_path(vault_root) else {
+        return;
+    };
+    let Some(dir) = path.parent() else {
+        return;
+    };
     let _ = std::fs::create_dir_all(&dir);
     if let Ok(body) = toml::to_string_pretty(&File { notes }) {
-        let _ = std::fs::write(recent_notes_path(vault_root), body);
+        let _ = std::fs::write(path, body);
+    }
+}
+
+#[cfg(test)]
+mod recent_notes_boundary_tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn recent_notes_do_not_read_or_write_through_external_metadata_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let vault = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let sentinel = outside.path().join("recent-notes.toml");
+        std::fs::write(&sentinel, "notes = [\"outside-secret.md\"]\n").unwrap();
+        symlink(outside.path(), vault.path().join(".celestine")).unwrap();
+
+        assert!(load_recent_notes(vault.path()).is_empty());
+        save_recent_notes(vault.path(), &["inside.md".to_string()]);
+        assert_eq!(
+            std::fs::read_to_string(sentinel).unwrap(),
+            "notes = [\"outside-secret.md\"]\n"
+        );
     }
 }
 

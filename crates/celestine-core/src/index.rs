@@ -1,4 +1,5 @@
 use crate::parse::{extract_note_data, Wikilink};
+use crate::resolve_vault_path;
 use crate::CoreError;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -76,9 +77,14 @@ impl VaultIndex {
     }
 
     pub fn upsert_file(&mut self, vault_root: &Path, path: &Path) -> Result<NoteId, CoreError> {
+        let rel_path = path.strip_prefix(vault_root).map_err(|_| {
+            CoreError::InvalidVaultPath(format!("{} is outside the vault", path.display()))
+        })?;
+        let path = resolve_vault_path(vault_root, rel_path)?;
+        let canonical_root = vault_root.canonicalize()?;
         let rel = path
-            .strip_prefix(vault_root)
-            .unwrap_or(path)
+            .strip_prefix(&canonical_root)
+            .map_err(|_| CoreError::InvalidVaultPath(format!("{} is outside the vault", path.display())))?
             .to_string_lossy()
             .replace('\\', "/");
         if !rel.to_lowercase().ends_with(".md") {
@@ -92,7 +98,7 @@ impl VaultIndex {
             return Err(CoreError::NoteNotFound(rel));
         }
 
-        let content = std::fs::read_to_string(path)?;
+        let content = std::fs::read_to_string(&path)?;
         let parsed = extract_note_data(&content);
         let stem = path
             .file_stem()

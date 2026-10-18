@@ -56,16 +56,20 @@ pub fn resolve_image_abs(
     let cleaned = cleaned.trim_start_matches('/');
 
     let mut candidates: Vec<PathBuf> = Vec::new();
-    candidates.push(vault_root.join(cleaned));
+    candidates.push(PathBuf::from(cleaned));
     if let Some(parent) = Path::new(note_rel).parent() {
         let parent_s = parent.to_string_lossy();
         if !parent_s.is_empty() && parent_s != "." {
-            candidates.push(vault_root.join(parent).join(cleaned));
+            candidates.push(parent.join(cleaned));
         }
     }
 
-    if let Some(hit) = candidates.iter().find(|p| p.is_file()) {
-        return Some(hit.clone());
+    for rel in candidates {
+        if let Ok(path) = celestine_core::resolve_vault_path(vault_root, &rel) {
+            if path.is_file() {
+                return Some(path);
+            }
+        }
     }
 
     // Basename search (Obsidian-style) against known vault images.
@@ -78,9 +82,10 @@ pub fn resolve_image_abs(
             .map(|s| s.to_string_lossy().to_lowercase())
             .unwrap_or_default();
         if name == want {
-            let p = vault_root.join(rel);
-            if p.is_file() {
-                return Some(p);
+            if let Ok(path) = celestine_core::resolve_vault_path(vault_root, Path::new(rel)) {
+                if path.is_file() {
+                    return Some(path);
+                }
             }
         }
     }
@@ -88,7 +93,14 @@ pub fn resolve_image_abs(
 }
 
 pub fn abs_to_rel(vault_root: &Path, abs: &Path) -> Option<String> {
-    abs.strip_prefix(vault_root)
+    let canonical_root = vault_root.canonicalize().ok()?;
+    let rel = abs.strip_prefix(&canonical_root).ok()?;
+    let resolved = celestine_core::resolve_vault_path(&canonical_root, rel).ok()?;
+    if !abs.canonicalize().ok()?.starts_with(&canonical_root) {
+        return None;
+    }
+    resolved
+        .strip_prefix(&canonical_root)
         .ok()
         .map(|p| p.to_string_lossy().replace('\\', "/"))
 }
@@ -130,4 +142,71 @@ pub fn show_standalone(ui: &mut egui::Ui, abs: &Path, muted: egui::Color32) {
                 .maintain_aspect_ratio(true),
         );
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn image_resolution_rejects_absolute_and_escaping_destinations() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("outside.png"), b"outside").unwrap();
+
+        let sibling_name = outside.path().file_name().unwrap().to_string_lossy();
+        let dest = format!("../{sibling_name}/outside.png");
+        assert!(
+            resolve_image_abs(root.path(), "notes/page.md", &dest, &[]).is_none(),
+            "accepted outside destination {dest:?}"
+        );
+        let canonical_root = root.path().canonicalize().unwrap();
+        assert!(abs_to_rel(&canonical_root, &canonical_root.join(&dest)).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn image_resolution_rejects_external_symlinks_but_accepts_internal_ones() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret.png"), b"outside").unwrap();
+        fs::create_dir(root.path().join("images")).unwrap();
+        fs::write(root.path().join("images/inside.png"), b"inside").unwrap();
+        symlink(outside.path().join("secret.png"), root.path().join("external.png")).unwrap();
+        symlink(outside.path().join("missing.png"), root.path().join("dangling.png")).unwrap();
+        symlink(root.path().join("images/inside.png"), root.path().join("internal.png")).unwrap();
+
+        assert!(resolve_image_abs(root.path(), "", "external.png", &[]).is_none());
+        assert!(resolve_image_abs(root.path(), "", "dangling.png", &[]).is_none());
+        let resolved = resolve_image_abs(root.path(), "", "internal.png", &[]).unwrap();
+        assert_eq!(fs::canonicalize(resolved).unwrap(), fs::canonicalize(root.path().join("images/inside.png")).unwrap());
+    }
+
+    #[test]
+    fn image_resolution_keeps_in_vault_navigation_and_basename_search() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("images")).unwrap();
+        fs::create_dir_all(root.path().join("notes/sub")).unwrap();
+        fs::write(root.path().join("images/shared.png"), b"root-relative").unwrap();
+        fs::write(root.path().join("notes/sub/near.png"), b"note-relative").unwrap();
+        fs::write(root.path().join("notes/local.png"), b"parent navigation").unwrap();
+        let known = vec!["images/shared.png".to_string()];
+
+        for (note, dest, expected) in [
+            ("notes/sub/page.md", "images/shared.png", "images/shared.png"),
+            ("notes/sub/page.md", "near.png", "notes/sub/near.png"),
+            ("notes/sub/page.md", "../local.png", "notes/local.png"),
+            ("notes/page.md", "shared.png", "images/shared.png"),
+        ] {
+            let resolved = resolve_image_abs(root.path(), note, dest, &known).unwrap();
+            assert_eq!(
+                fs::canonicalize(resolved).unwrap(),
+                fs::canonicalize(root.path().join(expected)).unwrap(),
+                "wrong target for {dest:?} from {note:?}"
+            );
+        }
+    }
 }
